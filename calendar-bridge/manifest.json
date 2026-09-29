@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.5.0",
+  "version": "3.5.1",
   "permissions": [
     "storage"
   ],
@@ -14,18 +14,34 @@
     }
   },
   "experiment": {
+    "schema": [
+      {
+        "namespace": "BridgeParent",
+        "description": "Privileged calendar access for the KeywordCal Calendar Bridge (used only by this add-on's own background script).",
+        "experimental": true,
+        "functions": [
+          {
+            "name": "listCalendars",
+            "type": "function",
+            "parameters": []
+          },
+          {
+            "name": "createItem",
+            "type": "function",
+            "parameters": [
+              { "name": "item", "type": "object", "additionalProperties": true }
+            ]
+          }
+        ]
+      }
+    ],
     "api": [
       {
         "name": "BridgeParent",
+        "schema": {},
         "parent": {
-          "scopes": [
-            "addon_parent"
-          ],
-          "paths": [
-            [
-              "BridgeParent"
-            ]
-          ],
+          "scopes": ["addon_parent"],
+          "paths": [["BridgeParent"]],
           "script": "api.js"
         }
       }
@@ -33,6 +49,7 @@
   },
   "background": {
     "scripts": [
+      "api.js",
       "background.js"
     ]
   }
