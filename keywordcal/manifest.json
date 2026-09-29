@@ -1,0 +1,40 @@
+{
+  "manifest_version": 2,
+  "name": "KeywordCal",
+  "version": "0.1.0",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
+  "author": "Your Name",
+  "homepage_url": "https://example.com/keywordcal",
+  "applications": {
+    "gecko": {
+      "id": "keywordcal@yourdomain.com",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "messagesRead",
+    "accountsRead",
+    "storage",
+    "notifications"
+  ],
+  "background": {
+    "scripts": [
+      "lib/ruleStore.js",
+      "lib/dateParser.js",
+      "lib/templateResolver.js",
+      "lib/calendarWriter.js",
+      "lib/ruleEngine.js",
+      "background.js"
+    ]
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "64": "icons/icon-64.png"
+  }
+}
