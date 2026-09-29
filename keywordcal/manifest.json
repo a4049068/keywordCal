@@ -16,7 +16,8 @@
     "messagesRead",
     "accountsRead",
     "storage",
-    "notifications"
+    "notifications",
+    "calendar"
   ],
   "background": {
     "scripts": [

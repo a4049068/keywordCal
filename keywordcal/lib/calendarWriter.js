@@ -5,7 +5,10 @@
 
 const CalendarWriter = {
   async _getTargetCalendar(calendarId) {
-    const calendars = await browser.calendar.calendars.get();
+    // NOTE: the Thunderbird calendar experiment API exposes calendars.list(),
+    // not calendars.get() (which takes an id). Using list() avoids a startup
+    // "invalid API" failure that can make TB flag the add-on as corrupt.
+    const calendars = await browser.calendar.calendars.list();
     if (calendarId === "default") {
       return calendars[0]; // First calendar as fallback
     }
