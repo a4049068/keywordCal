@@ -27,25 +27,13 @@ const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
 const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
 const LOG_PREFIX = "[KeywordCal Bridge]";
 
-// Other add-ons (CardBook, VFS Toolkit, FileLink, ...) broadcast discovery
-// messages to every extension via onMessageExternal. Those are expected and
-// harmless — never log them; only KeywordCal's own traffic is interesting.
-const FOREIGN_MSG_ALLOWLIST = new Set([
-  "vfs-toolkit-discover",
-  "filelink-discover",
-  "discover-provider",
-  "gpg-delegate-list",
-]);
-
+// Anything that isn't our known protocol shape (foreign add-on discovery
+// pings from CardBook/VFS Toolkit/FileLink, junk payloads, etc.) is expected
+// and harmless — drop it silently. Only KeywordCal's own traffic is served.
 function isForeignNoise(message) {
   if (!message || typeof message !== "object") return true; // junk payload
-  const t = String(message.type || "");
-  if (FOREIGN_MSG_ALLOWLIST.has(t)) return true;
-  // Generic heuristic: anything that isn't our known protocol shape.
   return !(message.keywordcal === "registry" ||
-    message.method === "listCalendars" ||
-    message.method === "createItem" ||
-    message.method === "deleteItem");
+    ["listCalendars", "createItem", "deleteItem"].includes(message.method));
 }
 
 function log(...args) { console.log(LOG_PREFIX, ...args); }
@@ -87,14 +75,16 @@ browser.runtime.onInstalled.addListener((info) => {
 async function handle(message, sender) {
   if (!message || typeof message !== "object") return undefined;
 
-  // Serve KeywordCal only. The bridge's own window never sends external
-  // messages, so anything from another extension is rejected here — but
-  // silently: other add-ons constantly broadcast discovery pings to every
-  // extension and logging those just floods the console with noise.
+  // Serve KeywordCal only. Other add-ons constantly broadcast discovery
+  // pings to every extension via onMessageExternal; drop all foreign
+  // traffic silently EXCEPT KeywordCal-shaped requests that arrive from an
+  // unexpected sender id (those indicate a misconfigured install and are
+  // worth one warning line).
   if (!sender || sender.id !== KEYWORDCAL_ID) {
     if (!isForeignNoise(message)) {
-      warn(`ignoring unexpected (non-KeywordCal) message shape from "${sender && sender.id}":`,
-        JSON.stringify(message).slice(0, 120));
+      warn(`KeywordCal-shaped request from unexpected sender "${sender && sender.id}" — ignoring. ` +
+        `Expected sender id: ${KEYWORDCAL_ID}. If you renamed/reinstalled KeywordCal, ` +
+        `check its manifest applications.gecko.id.`);
     }
     return undefined;
   }
