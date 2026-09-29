@@ -238,8 +238,15 @@ async function saveRule(event) {
   const conditions = collectConditions().filter((c) => c.value.trim() !== "");
   const actions = collectActions();
 
-  if (!ruleDataName(elements.name.value)) {
+  const ruleName = elements.name.value.trim();
+  if (!ruleName) {
     alert("Give the rule a name first.");
+    return;
+  }
+  // Thunderbird's mail-filter parser treats "," as a condition separator, so
+  // commas in rule names can corrupt exports/future filter syncs — reject.
+  if (/[,]/.test(ruleName)) {
+    alert('Rule names cannot contain commas ("," is reserved). Please use "-" instead.');
     return;
   }
   if (conditions.length === 0) {
@@ -252,7 +259,7 @@ async function saveRule(event) {
   }
 
   const ruleData = {
-    name: elements.name.value.trim(),
+    name: ruleName,
     enabled: elements.enabled.checked,
     matchType: elements.matchType.value,
     conditions,
@@ -276,6 +283,54 @@ async function saveRule(event) {
 async function init() {
   await refreshCalendarList(); // populate picker before first render
   renderRuleList();
+
+  // Live status banner: bridge state + reachable calendars, refreshed when
+  // the shared-storage registration key changes (bridge install/register).
+  const banner = document.getElementById("status-banner");
+  async function updateBanner() {
+    try {
+      const res = await browser.runtime.sendMessage({ type: "keywordcal:listCalendars" });
+      if (!banner) return;
+      if (res && res.bridgeInstalled) {
+        const names = (res.calendars || []).map((c) => c.name).join(", ");
+        banner.textContent =
+          `✔ Calendar Bridge connected. Calendars: ${names || "(none found)"}. ` +
+          "Events/tasks are filed silently into the calendar each action selects.";
+        banner.className = "banner ok";
+      } else {
+        banner.textContent =
+          "⚠ Calendar Bridge not detected — items open as .ics compose drafts instead of " +
+          "being filed directly. Install keywordcal-bridge for silent direct writes.";
+        banner.className = "banner warn";
+      }
+    } catch (e) {
+      if (banner) {
+        banner.textContent = "Background unavailable right now — reload this page after Thunderbird finishes starting.";
+        banner.className = "banner warn";
+      }
+    }
+  }
+  updateBanner();
+  if (browser.storage?.local?.onChanged) {
+    browser.storage.local.onChanged.addListener((changes) => {
+      if (changes.keywordcal_bridge_id) {
+        refreshCalendarList().then(() => {
+          updateBanner();
+          if (!elements.editorSection.classList.contains("hidden")) {
+            // Re-fill any open editor's dropdowns with the fresh list.
+            elements.actionsContainer
+              .querySelectorAll(".action-block")
+              .forEach((block) =>
+                fillCalendarSelect(
+                  block.querySelector(".action-calendar"),
+                  getBlockCalendarId(block)
+                )
+              );
+          }
+        });
+      }
+    });
+  }
 }
 
 elements.addRuleBtn.addEventListener("click", () => openEditor());
@@ -293,4 +348,3 @@ elements.restoreDefaultsBtn.addEventListener("click", async () => {
 
 init();
 
-function ruleDataName(v) { return String(v || "").trim() !== ""; }

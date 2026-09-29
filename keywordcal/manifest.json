@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal",
-  "version": "3.5.4",
+  "version": "3.6.0",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "author": "Your Name",

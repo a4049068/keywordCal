@@ -1,79 +1,106 @@
-/**
- * KeywordCal Calendar Bridge - background script.
- *
- * 1. Answers KeywordCal's discovery broadcast ("registry") so the main
- *    add-on can find us via browser.runtime.sendMessage().
- * 2. Relays messages from KeywordCal to the privileged experiment API.
- * 3. Proactively registers itself in browser.storage.local under the key
- *    "keywordcal_bridge_id" — a shared, origin-scoped fallback for when
- *    cross-extension messaging is blocked by Thunderbird's privacy
- *    settings (mail.extensionsCrossClientPrivilegedCollaboration=false).
- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 "use strict";
 
-// KeywordCal's own extension id (hardcoded so we can seed shared storage
-// for it even before KeywordCal asks us anything).
+/**
+ * KeywordCal Calendar Bridge — background script.
+ *
+ * Responsibilities (all verbose-logged so the Browser Console tells you
+ * exactly what happened):
+ *   1. Register this add-on's id in shared browser.storage.local under
+ *      "keywordcal_bridge_id" on startup/install/update. That is the
+ *      PRIMARY discovery channel KeywordCal uses (cross-extension
+ *      messaging is blocked by default privacy prefs, so we do NOT rely
+ *      on it).
+ *   2. Serve KeywordCal's messages: { keywordcal: "registry" } -> our id;
+ *      { method: "listCalendars" | "createItem", item? } -> forwarded to
+ *      the privileged BridgeParent experiment API defined in api.js.
+ *
+ * Only requests from KeywordCal itself are served; everything else is
+ * ignored and logged.
+ */
+
 const KEYWORDCAL_ID = "keywordcal@yourdomain.com";
 const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
+const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
+const LOG_PREFIX = "[KeywordCal Bridge]";
 
-// --- Shared-storage registration (fallback discovery channel) ---
-// Thunderbird gives all add-ons from the same origin (here: temporary/
-// unpacked installs) one shared browser.storage.local. We pre-write our
-// id into KeywordCal's copy so discovery works even when cross-extension
-// messaging is blocked by privacy prefs. Re-seeded on startup/install
-// because a KeywordCal-side cleanup may clear it.
-//
-// NOTE: this requires the "storage" permission — without it,
-// browser.storage.local is undefined and the fallback channel silently
-// dies (and the uncaught TypeError at load time could abort the script).
-function registerWithKeywordCal() {
+function log(...args) { console.log(LOG_PREFIX, ...args); }
+function warn(...args) { console.warn(LOG_PREFIX, ...args); }
+
+// ---------- 1. Shared-storage registration ----------
+
+async function register() {
   try {
-    if (!browser.storage || !browser.storage.local) return;
-    browser.storage.local
-      .set({ keywordcal_bridge_id: BRIDGE_ID })
-      .catch(() => {});
+    if (!browser.storage || !browser.storage.local) {
+      warn("storage unavailable — KeywordCal will fall back to .ics drafts");
+      return;
+    }
+    await browser.storage.local.set({ [BRIDGE_STORAGE_KEY]: BRIDGE_ID });
+    log(`registered as "${BRIDGE_ID}" in shared storage`);
   } catch (e) {
-    /* storage not ready yet */
+    warn("registration failed:", e);
   }
 }
-registerWithKeywordCal();
-browser.runtime.onStartup.addListener(registerWithKeywordCal);
-browser.runtime.onInstalled.addListener(registerWithKeywordCal);
 
-// --- Discovery + method relay over cross-extension messaging ---
-browser.runtime.onMessageExternal.addListener((message, sender) =>
-  handle(message, sender)
-);
-browser.runtime.onMessage.addListener((message, sender) => {
-  if (sender && sender.id === BRIDGE_ID) return undefined; // ignore self
-  return handle(message, sender);
+register();
+browser.runtime.onStartup.addListener(register);
+browser.runtime.onInstalled.addListener((info) => {
+  log("onInstalled:", JSON.stringify(info));
+  register();
 });
+
+// ---------- 2. Message relay ----------
 
 async function handle(message, sender) {
   if (!message || typeof message !== "object") return undefined;
 
-  // Only serve KeywordCal itself.
-  if (sender && sender.id && sender.id !== KEYWORDCAL_ID) return undefined;
+  // Serve KeywordCal only. The bridge's own window never sends external
+  // messages, so anything from another extension is rejected here.
+  if (!sender || sender.id !== KEYWORDCAL_ID) {
+    warn(`ignoring message from unexpected sender "${sender && sender.id}":`,
+      JSON.stringify(message).slice(0, 120));
+    return undefined;
+  }
 
   if (message.keywordcal === "registry") {
+    log("registry probe answered");
     return { extensionId: BRIDGE_ID, methods: ["listCalendars", "createItem"] };
   }
 
-  if (typeof message.method !== "string") return undefined;
-  if (!["listCalendars", "createItem"].includes(message.method)) return undefined;
+  const method = message.method;
+  if (method !== "listCalendars" && method !== "createItem") {
+    warn(`unknown method "${method}" — ignoring`);
+    return undefined;
+  }
 
+  const api = browser.BridgeParent;
+  if (!api || typeof api[method] !== "function") {
+    warn(`BridgeParent.${method} unavailable — is the experiment API loaded?`);
+    return { ok: false, error: "BridgeParent experiment API unavailable" };
+  }
+
+  log(`relaying ${method} to experiment API`);
   try {
-    const api = browser.BridgeParent;
-    if (!api || typeof api[message.method] !== "function") {
-      return { ok: false, error: "BridgeParent experiment API unavailable" };
-    }
-    if (message.method === "listCalendars") {
-      return await api.listCalendars();
-    }
-    return await api.createItem(message.item || {});
+    return method === "listCalendars"
+      ? await api.listCalendars()
+      : await api.createItem(message.item || {});
   } catch (err) {
-    console.error("[KeywordCal Bridge] handler error:", err);
+    warn(`${method} threw:`, err);
     return { ok: false, error: String(err) };
   }
 }
+
+// KeywordCal talks to us via runtime.sendMessage(bridgeId, ...) which
+// arrives on BOTH listeners below depending on how Thunderbird routes
+// same-origin cross-extension messages. Handle both identically.
+browser.runtime.onMessageExternal.addListener((message, sender) =>
+  handle(message, sender)
+);
+browser.runtime.onMessage.addListener((message, sender) =>
+  handle(message, sender)
+);
+
+log("background script loaded; waiting for KeywordCal");

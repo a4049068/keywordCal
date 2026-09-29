@@ -1,10 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.5.4",
-  "permissions": [
-    "storage"
-  ],
+  "version": "3.6.0",
   "description": "Companion add-on that gives KeywordCal direct write access to Thunderbird calendars: events/tasks are filed silently into the calendar you pick per rule, with no compose windows. Install alongside KeywordCal.",
   "author": "Your Name",
   "applications": {
@@ -14,59 +11,18 @@
     }
   },
   "experiment": {
-    "schema": [
-      {
-        "namespace": "BridgeParent",
-        "description": "Privileged calendar access for the KeywordCal Calendar Bridge (used only by this add-on's own background script).",
-        "experimental": true,
-        "functions": [
-          {
-            "name": "listCalendars",
-            "type": "function",
-            "parameters": []
-          },
-          {
-            "name": "createItem",
-            "type": "function",
-            "parameters": [
-              {
-                "name": "item",
-                "type": "object",
-                "additionalProperties": true
-              }
-            ]
-          }
-        ]
+    "schema": "schema.json",
+    "api": {
+      "name": "BridgeParent",
+      "schema": "schema.json",
+      "parent": {
+        "scopes": ["main", "addon_parent"],
+        "paths": [["BridgeParent"]],
+        "script": "api.js"
       }
-    ],
-    "api": [
-      {
-        "name": "BridgeParent",
-        "schema": {},
-        "parent": {
-          "scopes": [
-            "main",
-            "addon_parent",
-            "parseCmxHeaderResponseJSON",
-            "addcaldav",
-            "caldavjs"
-          ],
-          "paths": [
-            [
-              "BridgeParent"
-            ]
-          ],
-          "script": "api.js"
-        },
-        "options": {
-          "context_in_parent": true
-        }
-      }
-    ]
+    }
   },
   "background": {
-    "scripts": [
-      "background.js"
-    ]
+    "scripts": ["background.js"]
   }
 }

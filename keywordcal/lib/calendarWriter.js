@@ -5,25 +5,19 @@
 /**
  * CalendarWriter - Creates calendar events/tasks from matched messages.
  *
- * IMPORTANT IMPLEMENTATION NOTE
- * -----------------------------
- * MailExtensions (privileged WebExtensions) have NO calendar API:
- * `browser.calendar.*` does not exist for them and Thunderbird's built-in
- * experiment APIs are unavailable in MailExtension add-ons. Earlier
- * versions of this file called browser.calendar.calendars.list(), which
- * (a) always rejected and (b) risked disturbing remote (CalDAV/Google)
- * calendars — a failed DAV_REPORT gets a calendar disabled until restart.
+ * How it works (two paths, tried in order):
+ *   1. Calendar Bridge add-on (../calendar-bridge/): a companion privileged
+ *      experiment add-on that files items silently into the exact calendar
+ *      each rule selects. KeywordCal finds it through a shared
+ *      browser.storage.local key the bridge writes about itself ("primary"
+ *      channel — cross-extension messaging is blocked by Thunderbird's
+ *      default privacy prefs), then talks to it via runtime.sendMessage.
+ *   2. Fallback (no bridge installed): open a compose window carrying the
+ *      item as an .ics attachment (browser.compose.openComposeWindow); the
+ *      user files it via Thunderbird's native "Add to calendar" bar.
  *
- * This version therefore:
- *   1. Never touches the calendar subsystem directly.
- *   2. Optionally delegates to a companion "Calendar Bridge" experiment
- *      add-on (see ../calendar-bridge/) discovered via a registry message
- *      broadcast to all extensions; only that add-on (experimental:true)
- *      may use calICalendar via Cc/Ci.
- *   3. Falls back to opening a compose window carrying the item as an .ics
- *      attachment (browser.compose.openComposeWindow — "compose" permission),
- *      which the user can file into any calendar via Thunderbird's native
- *      .ics handling.
+ * Every step logs "[KeywordCal]" lines so the Browser Console shows exactly
+ * what happened and why.
  */
 
 const BRIDGE_REGISTRY_MSG = { keywordcal: "registry" };
@@ -35,56 +29,69 @@ const CalendarWriter = {
   _discoveryPromise: null,
 
   /**
-   * Find the Calendar Bridge companion add-on. Two channels:
-   *   1. Shared browser.storage.local key written by the bridge itself
-   *      (works even when cross-extension messaging is blocked).
-   *   2. A registry broadcast to all running extensions.
-   * Returns the bridge's extension id, or null if not installed.
+   * Find the Calendar Bridge companion add-on. Returns its extension id,
+   * or null if it is not installed / not answering.
    */
-  findBridge() {
-    if (this._bridgeId) return Promise.resolve(this._bridgeId);
+  async findBridge() {
+    if (this._bridgeId) return this._bridgeId;
     if (this._discoveryPromise) return this._discoveryPromise;
 
     this._discoveryPromise = (async () => {
-      // Channel 1: shared-storage registration.
+      let storedId = null;
       try {
         const data = await browser.storage.local.get(BRIDGE_STORAGE_KEY);
-        const id = data[BRIDGE_STORAGE_KEY];
-        if (typeof id === "string" && id.includes("@")) {
-          // Sanity-check it actually answers before caching.
-          try {
-            const reply = await browser.runtime.sendMessage(id, BRIDGE_REGISTRY_MSG);
-            if (reply && Array.isArray(reply.methods) &&
-                reply.methods.some((m) => BRIDGE_METHODS.includes(m))) {
-              this._bridgeId = id;
-              console.log(`[KeywordCal] Calendar Bridge found (storage): ${id}`);
-              return id;
-            }
-          } catch (e) {
-            // Stale entry — clean it up so the bridge can re-register.
-            await browser.storage.local.remove(BRIDGE_STORAGE_KEY).catch(() => {});
-          }
-        }
-      } catch (e) { /* storage unavailable */ }
-
-      // Channel 2: broadcast discovery to every extension.
-      try {
-        const reply = await browser.runtime.sendMessage(BRIDGE_REGISTRY_MSG);
-        if (
-          reply &&
-          typeof reply.extensionId === "string" &&
-          Array.isArray(reply.methods) &&
-          reply.methods.some((m) => BRIDGE_METHODS.includes(m))
-        ) {
-          this._bridgeId = reply.extensionId;
-          console.log(`[KeywordCal] Calendar Bridge found (broadcast): ${this._bridgeId}`);
-          return this._bridgeId;
-        }
-      } catch (err) {
-        // No listener anywhere -> rejects with "Could not establish
-        // connection". That simply means the bridge isn't installed.
+        storedId = data && data[BRIDGE_STORAGE_KEY];
+      } catch (e) {
+        console.warn("[KeywordCal] bridge storage lookup failed:", e);
       }
-      return null;
+
+      if (typeof storedId !== "string" || !storedId.includes("@")) {
+        console.log(
+          "[KeywordCal] Calendar Bridge not registered in shared storage — " +
+          "is keywordcal-bridge installed AND enabled? Will fall back to .ics drafts."
+        );
+        return null;
+      }
+
+      // Probe it. If the bridge answers on ANY channel, cache its id.
+      // Note: sendMessage to another extension normally requires the
+      // privileged-collaboration pref; same-origin unpacked installs answer
+      // regardless, so we try both targeted and broadcast and log results.
+      const probes = [
+        ["targeted", () => browser.runtime.sendMessage(storedId, BRIDGE_REGISTRY_MSG)],
+        ["broadcast", () => browser.runtime.sendMessage(BRIDGE_REGISTRY_MSG)],
+      ];
+      for (const [label, probe] of probes) {
+        try {
+          const reply = await probe();
+          if (
+            reply &&
+            typeof reply.extensionId === "string" &&
+            Array.isArray(reply.methods) &&
+            reply.methods.some((m) => BRIDGE_METHODS.includes(m))
+          ) {
+            this._bridgeId = reply.extensionId;
+            console.log(`[KeywordCal] Calendar Bridge found (${label}): ${this._bridgeId}`);
+            return this._bridgeId;
+          }
+          console.warn(`[KeywordCal] Bridge probe (${label}) got unexpected reply:`, reply);
+        } catch (err) {
+          console.log(
+            `[KeywordCal] Bridge probe (${label}) failed: ${err} ` +
+            "(expected if cross-extension messaging is blocked)"
+          );
+        }
+      }
+
+      // Storage says the bridge exists but nothing answered. Keep using the
+      // stored id anyway: method calls below go straight to it and will
+      // either work (same-origin) or surface their own errors.
+      console.warn(
+        `[KeywordCal] Bridge "${storedId}" registered but unresponsive — ` +
+        "using stored id for direct calls; will fall back to .ics if they fail."
+      );
+      this._bridgeId = storedId;
+      return storedId;
     })().finally(() => {
       this._discoveryPromise = null;
     });
@@ -138,6 +145,7 @@ const CalendarWriter = {
     const bridgeId = await this.findBridge();
     if (!bridgeId) return null;
     try {
+      console.log(`[KeywordCal] -> bridge(${bridgeId}) createItem "${item.title}" into "${item.calendarId}"`);
       const created = await browser.runtime.sendMessage(bridgeId, {
         method: "createItem",
         item,
@@ -146,9 +154,15 @@ const CalendarWriter = {
         if (created.ok && !created.calendarName) {
           created.calendarName = await this._calendarLabel(item.calendarId);
         }
+        console.log(`[KeywordCal] <- bridge createItem: ${JSON.stringify(created)}`);
         return created;
       }
-      return { ok: false, error: "bridge returned an unexpected response" };
+      console.warn("[KeywordCal] Bridge returned an unexpected response:", created);
+      // An unresponsive/updated bridge answers with undefined — treat as
+      // absent so the caller falls back to the .ics compose draft instead
+      // of silently dropping the event.
+      this.forgetBridge();
+      return null;
     } catch (err) {
       console.warn("[KeywordCal] Bridge createItem failed:", err);
       this.forgetBridge();

@@ -123,3 +123,15 @@ th { color: var(--muted); font-weight: 500; }
   border-top: 2px solid var(--border);
   padding-top: 1rem;
 }
+
+/* Status banner (bridge state) */
+.banner {
+  margin: 0.5rem 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  border: 1px solid var(--border);
+  background: #f6f8fa;
+}
+.banner.ok   { background: #e7f4e8; border-color: #b7dab9; color: #22602a; }
+.banner.warn { background: #fdf3e3; border-color: #e8cf9a; color: #7a4c07; }
