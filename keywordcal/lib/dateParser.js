@@ -84,6 +84,35 @@ const DateParser = {
 
   /** Find distinct candidate dates and select the first one in the text. */
   _heuristicExtract(text, options) {
+    const candidates = new Map();
+    const searchableText = text.split("");
+    const addCandidate = (token, index) => {
+      const parsed = this._fromToken(token, options);
+      if (parsed) {
+        candidates.set(parsed.date.toDateString(), { ...parsed, token, index });
+      }
+    };
+
+    const namedRange = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\s*[-\u2013\u2014]\s*(\d{1,2})(?:st|nd|rd|th)?/gi;
+    for (const match of text.matchAll(namedRange)) {
+      const month = match[1];
+      const addRange = (first, last, index, rangeText) => {
+        addCandidate(`${month} ${first}`, index);
+        addCandidate(`${month} ${last}`, index + rangeText.lastIndexOf(String(last)));
+      };
+      addRange(match[2], match[3], match.index, match[0]);
+
+      let rangeEnd = match.index + match[0].length;
+      while (true) {
+        const repeatedRange = /^\s*,\s*(?:and\s+)?(\d{1,2})(?:st|nd|rd|th)?\s*[-\u2013\u2014]\s*(\d{1,2})(?:st|nd|rd|th)?/i.exec(text.slice(rangeEnd));
+        if (!repeatedRange) break;
+        const rangeIndex = rangeEnd + repeatedRange.index;
+        addRange(repeatedRange[1], repeatedRange[2], rangeIndex, repeatedRange[0]);
+        rangeEnd += repeatedRange[0].length;
+      }
+      for (let index = match.index; index < rangeEnd; index += 1) searchableText[index] = " ";
+    }
+
     const patterns = [
       /\b\d{4}[/-]\d{1,2}[/-]\d{1,2}\b/gi,
       /(?<![\d/-])\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g,
@@ -94,11 +123,10 @@ const DateParser = {
       /\btomorrow\b/gi,
     ];
 
-    const candidates = new Map();
+    const remainingText = searchableText.join("");
     for (const pattern of patterns) {
-      for (const match of text.matchAll(pattern)) {
-        const parsed = this._fromToken(match[0], options);
-        if (parsed) candidates.set(parsed.date.toDateString(), { ...parsed, token: match[0], index: match.index });
+      for (const match of remainingText.matchAll(pattern)) {
+        addCandidate(match[0], match.index);
       }
     }
     const ordered = [...candidates.values()].sort((a, b) => a.index - b.index);

@@ -69,6 +69,16 @@ const RuleEngine = {
     return separator === -1 ? "" : value.slice(separator + 2);
   },
 
+  _normalizeSubject(subject) {
+    let normalized = String(subject || "").trim();
+    let previous;
+    do {
+      previous = normalized;
+      normalized = normalized.replace(/^(?:(?:re|fw|fwd)\s*:\s*|correction\s*[-:]\s*)+/i, "").trim();
+    } while (normalized !== previous);
+    return normalized;
+  },
+
   async _evaluateCondition(msg, cond) {
     const fieldValue = this._getFieldValue(msg, cond);
     const targetValue = this._conditionOperand(cond);
@@ -104,7 +114,7 @@ const RuleEngine = {
 
   _getFieldValue(msg, cond) {
     switch (cond.field) {
-      case "subject":   return msg.subject;
+      case "subject":   return this._normalizeSubject(msg.subject);
       case "body":      return msg.body;
       case "sender":    return msg.sender;
       case "recipient": return msg.recipients;

@@ -44,3 +44,14 @@ test("malformed header conditions fail closed", async () => {
     value: "X-Priority",
   }), false);
 });
+
+test("subject matching ignores correction and reply prefixes", async () => {
+  const engine = loadEngine();
+  assert.equal(await engine._evaluateCondition({
+    subject: "RE: CORRECTION - Camp Halloween Staff Sign Up",
+  }, {
+    field: "subject",
+    operator: "is",
+    value: "Camp Halloween Staff Sign Up",
+  }), true);
+});

@@ -113,39 +113,136 @@ const RuleStore = {
 
     const existingNames = new Set(existing.map((r) => r.name));
     const defaults = [
-      {
-        name: "ICS Auto-Accept",
-        enabled: true,
-        matchType: "all",
-        conditions: [{ field: "body", operator: "matches", value: "BEGIN:VCALENDAR" }],
-        actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "Imported from email by {sender}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [15], calendarId: "default" }],
-        stopProcessing: false,
-      },
-      {
-        name: "Deadline Detector",
-        enabled: true,
-        matchType: "all",
-        conditions: [{ field: "body", operator: "contains", value: "deadline" }, { field: "body", operator: "matches", value: "\\d{1,2}/\\d{1,2}" }],
-        actions: [{ type: "createTask", titleTemplate: "Deadline: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", datePattern: "(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})", reminderMinutes: [1440], calendarId: "default" }],
-        stopProcessing: false,
-      },
-      {
-        name: "Meeting Keyword",
-        enabled: true,
-        matchType: "any",
-        conditions: [{ field: "subject", operator: "contains", value: "meeting" }, { field: "subject", operator: "contains", value: "standup" }],
-        actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "From: {sender}", dateSource: "extract", durationMinutes: 30, reminderMinutes: [15], calendarId: "default", category: "Work" }],
-        stopProcessing: false,
-      },
-      {
-        name: "Reminder Flag",
-        enabled: true,
-        matchType: "all",
-        conditions: [{ field: "subject", operator: "contains", value: "[REMIND]" }],
-        actions: [{ type: "createReminder", titleTemplate: "{subject}", descriptionTemplate: "{body_excerpt}", dateSource: "extract", reminderMinutes: [0], calendarId: "default" }],
-        stopProcessing: false,
-      },
-    ];
+  {
+    name: "ICS Auto-Accept",
+    enabled: true,
+    matchType: "all",
+    conditions: [{ field: "body", operator: "matches", value: "BEGIN:VCALENDAR" }],
+    actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "Imported from email by {sender}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [15], calendarId: "default" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Flight/Travel Confirmation",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "subject", operator: "matches", value: "(flight|itinerary|booking|reservation|confirmation)", options: "i" },
+      { field: "body", operator: "matches", value: "(flight|depart|arrival|boarding|gate|terminal|airline|PNR|booking reference)", options: "i" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "✈️ {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", durationMinutes: 180, reminderMinutes: [1440, 60], calendarId: "default", category: "Travel" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Appointment Confirmation",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "subject", operator: "matches", value: "(appointment|scheduled|booking|reservation|confirmation)", options: "i" },
+      { field: "body", operator: "matches", value: "(doctor|dentist|clinic|hospital|appointment|scheduled for|your appointment)", options: "i" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "🏥 {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [1440, 60], calendarId: "default", category: "Health" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Video Meeting",
+    enabled: true,
+    matchType: "any",
+    conditions: [
+      { field: "body", operator: "matches", value: "(zoom\\.me|zoom\\.com|teams\\.microsoft|meet\\.google|webex|gotomeeting|bluejeans)", options: "i" },
+      { field: "subject", operator: "matches", value: "(meeting|call|sync|standup|1:1|one-on-one|interview)", options: "i" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "📹 {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [15, 5], calendarId: "default", category: "Work" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Deadline Detector",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "body", operator: "matches", value: "(deadline|due|due date|by|submit|submission)", options: "i" },
+      { field: "body", operator: "matches", value: "(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{1,2}\\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\s+\\d{2,4}|tomorrow|next week|end of day|EOD|COB)", options: "i" }
+    ],
+    actions: [{ type: "createTask", titleTemplate: "⏰ Deadline: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", datePattern: "(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4}|\\d{1,2}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\s+\\d{2,4})", reminderMinutes: [1440, 60], calendarId: "default" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Time-Sensitive Request",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "subject", operator: "matches", value: "(urgent|asap|immediately|time-sensitive|priority)", options: "i" },
+      { field: "body", operator: "matches", value: "(need|require|must|should|please|action required)", options: "i" }
+    ],
+    actions: [{ type: "createTask", titleTemplate: "🚨 URGENT: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", reminderMinutes: [0, 60], calendarId: "default", priority: "high" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Follow-up Request",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "body", operator: "matches", value: "(follow up|follow-up|check in|touch base|circle back|get back to)", options: "i" },
+      { field: "body", operator: "matches", value: "(tomorrow|next week|next month|in \\d+ days|by \\w+day)", options: "i" }
+    ],
+    actions: [{ type: "createTask", titleTemplate: "🔄 Follow-up: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", reminderMinutes: [1440], calendarId: "default" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Interview",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "subject", operator: "matches", value: "(interview|screening|assessment)", options: "i" },
+      { field: "body", operator: "matches", value: "(interview|candidate|position|role|apply|application)", options: "i" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "💼 Interview: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [1440, 60], calendarId: "default", category: "Career" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Bill Payment Due",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "subject", operator: "matches", value: "(invoice|bill|payment|statement|due|reminder)", options: "i" },
+      { field: "body", operator: "matches", value: "(payment due|due date|amount due|balance|invoice|bill|pay by)", options: "i" }
+    ],
+    actions: [{ type: "createTask", titleTemplate: "💰 Bill Due: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", reminderMinutes: [10080, 1440], calendarId: "default", category: "Finance" }],
+    stopProcessing: false,
+  },
+  {
+    name: "All-Day Event",
+    enabled: true,
+    matchType: "all",
+    conditions: [
+      { field: "body", operator: "matches", value: "(all day|all-day|entire day|full day)", options: "i" },
+      { field: "subject", operator: "matches", value: "(event|conference|workshop|training|holiday|vacation|PTO)", options: "i" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", allDay: true, reminderMinutes: [1440], calendarId: "default" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Meeting Keyword",
+    enabled: true,
+    matchType: "any",
+    conditions: [
+      { field: "subject", operator: "contains", value: "meeting" },
+      { field: "subject", operator: "contains", value: "standup" },
+      { field: "subject", operator: "contains", value: "sync" },
+      { field: "subject", operator: "contains", value: "1:1" },
+      { field: "subject", operator: "contains", value: "one-on-one" }
+    ],
+    actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "From: {sender}", dateSource: "extract", durationMinutes: 30, reminderMinutes: [15], calendarId: "default", category: "Work" }],
+    stopProcessing: false,
+  },
+  {
+    name: "Reminder Flag",
+    enabled: true,
+    matchType: "all",
+    conditions: [{ field: "subject", operator: "contains", value: "[REMIND]" }],
+    actions: [{ type: "createReminder", titleTemplate: "{subject}", descriptionTemplate: "{body_excerpt}", dateSource: "extract", reminderMinutes: [0], calendarId: "default" }],
+    stopProcessing: false,
+  },
+];
 
     for (const rule of defaults) {
       if (!existingNames.has(rule.name)) await this.addRule(structuredClone(rule));

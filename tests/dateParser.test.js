@@ -75,3 +75,19 @@ test("upcoming policy advances yearless dates that already passed", async () => 
   assert.ok(result.date >= new Date(new Date().getFullYear(), 0, 1));
   assert.equal(result.yearInferred, true);
 });
+
+test("named month ranges and compressed weekend lists stay distinct", async () => {
+  const parser = loadParser();
+  const result = await parser.extract(
+    "Set-Up Weekend (October 2-4): Weekends one, two and three " +
+      "(October 9-11, 16-18, and 23-25): Fall Festival (October 31)",
+    null,
+    { messageDate: new Date("2026-09-29T18:36:45Z") }
+  );
+
+  assert.equal(result.date.getFullYear(), 2026);
+  assert.equal(result.date.getMonth(), 9);
+  assert.equal(result.date.getDate(), 2);
+  assert.equal(result.candidateCount, 9);
+  assert.equal(result.uncertain, true);
+});
