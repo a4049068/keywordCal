@@ -212,6 +212,36 @@ class BridgeParent extends ExtensionAPI {
           }
         },
 
+        async findConflicts(details) {
+          log("findConflicts called:", JSON.stringify(details));
+          try {
+            const { cal: target, error } = resolveCalendar(details.calendarId, "event");
+            if (error) return []; // conflict check is best-effort — never throws upward
+            const start = new Date(details.start);
+            const end = new Date(details.end);
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) return [];
+            const items = await target.getItems(null, null);
+            const out = Array.from(items)
+              .filter((i) => i.startTime && i.endTime)
+              .filter((i) => {
+                const s = i.startTime.QueryInterface(Ci.calIDateTime).getAsUTC(0);
+                const e = i.endTime.getAsUTC(0);
+                const js = (dt) => new Date(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second).getTime();
+                return js(s) < end.getTime() && js(e) > start.getTime();
+              })
+              .map((i) => ({
+                title: i.title || "(untitled)",
+                startDate: i.startTime?.toString?.() || "",
+                endDate: i.endTime?.toString?.() || "",
+              }));
+            log(`findConflicts -> ${out.length} overlapping event(s)`);
+            return out;
+          } catch (err) {
+            warn("findConflicts failed (ignored):", err);
+            return [];
+          }
+        },
+
         async deleteItem(details) {
           log("deleteItem called:", JSON.stringify(details));
           try {

@@ -22,18 +22,25 @@
  * ignored and logged.
  */
 
-const KEYWORDCAL_ID = "keywordcal@yourdomain.com";
+// The bridge answers ANY sender that speaks the KeywordCal wire protocol
+// ({ keywordcal: "registry" } / { method: ... }). Sender-id allowlisting was
+// removed on purpose: under some Thunderbird routing modes external messages
+// arrive with an empty/undefined sender.id, which previously made the bridge
+// refuse legitimate KeywordCal calls ("unexpected sender" warnings). Foreign
+// add-ons never send KeywordCal-shaped payloads, so protocol-shape filtering
+// alone keeps them out.
 const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
+const KEYWORDCAL_HINT = "keywordcal@yourdomain.com"; // only used for log labeling
+const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem", "findConflicts"];
 const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
 const LOG_PREFIX = "[KeywordCal Bridge]";
 
 // Anything that isn't our known protocol shape (foreign add-on discovery
 // pings from CardBook/VFS Toolkit/FileLink, junk payloads, etc.) is expected
-// and harmless — drop it silently. Only KeywordCal's own traffic is served.
+// and harmless — drop it silently. Only KeywordCal-shaped traffic is served.
 function isForeignNoise(message) {
   if (!message || typeof message !== "object") return true; // junk payload
-  return !(message.keywordcal === "registry" ||
-    ["listCalendars", "createItem", "deleteItem"].includes(message.method));
+  return !(message.keywordcal === "registry" || BRIDGE_METHODS.includes(message.method));
 }
 
 function log(...args) { console.log(LOG_PREFIX, ...args); }
@@ -75,27 +82,24 @@ browser.runtime.onInstalled.addListener((info) => {
 async function handle(message, sender) {
   if (!message || typeof message !== "object") return undefined;
 
-  // Serve KeywordCal only. Other add-ons constantly broadcast discovery
-  // pings to every extension via onMessageExternal; drop all foreign
-  // traffic silently EXCEPT KeywordCal-shaped requests that arrive from an
-  // unexpected sender id (those indicate a misconfigured install and are
-  // worth one warning line).
-  if (!sender || sender.id !== KEYWORDCAL_ID) {
-    if (!isForeignNoise(message)) {
-      warn(`KeywordCal-shaped request from unexpected sender "${sender && sender.id}" — ignoring. ` +
-        `Expected sender id: ${KEYWORDCAL_ID}. If you renamed/reinstalled KeywordCal, ` +
-        `check its manifest applications.gecko.id.`);
-    }
-    return undefined;
+  // Serve KeywordCal's wire protocol from any sender. Foreign add-ons
+  // (CardBook/VFS Toolkit discovery pings etc.) never send KeywordCal-shaped
+  // payloads, so they fall into isForeignNoise() and are dropped silently —
+  // no misleading warnings when Thunderbird routes messages with an empty
+  // sender.id.
+  if (isForeignNoise(message)) return undefined;
+
+  if (sender && sender.id && sender.id !== BRIDGE_ID && sender.id !== KEYWORDCAL_HINT) {
+    log(`serving KeywordCal-shaped request from "${sender.id}"`);
   }
 
   if (message.keywordcal === "registry") {
     log("registry probe answered");
-    return { extensionId: BRIDGE_ID, methods: ["listCalendars", "createItem", "deleteItem"] };
+    return { extensionId: BRIDGE_ID, methods: BRIDGE_METHODS };
   }
 
   const method = message.method;
-  if (!["listCalendars", "createItem", "deleteItem"].includes(method)) {
+  if (!BRIDGE_METHODS.includes(method)) {
     warn(`unknown method "${method}" — ignoring`);
     return undefined;
   }

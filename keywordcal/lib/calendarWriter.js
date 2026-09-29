@@ -21,7 +21,7 @@
  */
 
 const BRIDGE_REGISTRY_MSG = { keywordcal: "registry" };
-const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem"];
+const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem", "findConflicts"];
 const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
 
 // Undo queue (design doc §9): every item the bridge files for us is pushed
@@ -219,6 +219,22 @@ const CalendarWriter = {
   },
 
   /**
+   * Conflict detection (design doc §9): ask the bridge for events in the
+   * target calendar overlapping [start, end). Returns [{ title, startDate,
+   * endDate }] (never includes the just-created item itself), or [] when the
+   * bridge is unavailable / has nothing to report. Warn-only by design —
+   * callers must never block creation on this.
+   */
+  async findConflicts(calendarId, start, end) {
+    const reply = await this._bridgeCall(
+      { method: "findConflicts", item: { calendarId, start: start.toISOString(), end: end.toISOString() } },
+      `findConflicts(${calendarId})`
+    );
+    if (!Array.isArray(reply)) return [];
+    return reply.filter((e) => e && typeof e.title === "string");
+  },
+
+  /**
    * Send a createItem request to the bridge. Returns the bridge's result
    * object ({ ok, id, calendarName } / { ok:false, error }) or null if no
    * bridge/failed hard. On success the item is pushed onto the undo queue.
@@ -400,6 +416,20 @@ const CalendarWriter = {
     });
     if (created && created.ok) {
       console.log(`[KeywordCal] Event created via bridge: "${title}" (${created.id})`);
+      // Conflict detection (design doc §9): warn — never block — when the
+      // target calendar already holds an event overlapping this window.
+      try {
+        const conflicts = await CalendarWriter.findConflicts(
+          action.calendarId || "default", startDate, endDate
+        );
+        if (conflicts.length) {
+          const names = conflicts.map((c) => `"${c.title}"`).join(", ");
+          console.warn(`[KeywordCal] ${conflicts.length} overlapping event(s) in target calendar: ${names}`);
+          this._notify(`Heads-up: "${title}" overlaps ${names}`);
+        }
+      } catch (e) {
+        /* conflict check is best-effort; never fails creation */
+      }
       this._notify(`Event created in "${created.calendarName || "calendar"}": "${title}"`);
       return created;
     }

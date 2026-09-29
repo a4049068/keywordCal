@@ -66,6 +66,26 @@
           "type": "object",
           "additionalProperties": true
         }
+      },
+      {
+        "name": "findConflicts",
+        "type": "function",
+        "description": "Return events in the named calendar overlapping [start,end) \u2014 powers KeywordCal's conflict warning.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
       }
     ]
   }
