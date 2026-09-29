@@ -14,10 +14,8 @@
  *   deleteItem({ calendarId, itemId })    -> { ok } | { ok:false, error }
  * (deleteItem powers KeywordCal's "Undo last action" feature.)
  *
- * Everything here uses plain XPCOM contracts only — no ES-module imports,
- * no ChromeUtils/Cu (those are unavailable inside the WebExtension sandbox
- * and caused the earlier load errors). Cc/Ci come from the "main" scope;
- * ExtensionAPI comes from the "addon_parent" scope (see manifest scopes).
+ * Calendar access uses Thunderbird's calendar module and XPCOM item factories.
+ * ChromeUtils, Cc, and Ci are available in the experiment's parent scope.
  * Verbose logging at every step so failures are diagnosable in the Browser
  * Console.
  */
@@ -38,14 +36,19 @@ function errlog(...args) {
 // ---------- XPCOM helpers ----------
 
 const SERVICES = {
-  manager: ["@mozilla.org/calendar/manager;1", "calICalendarManager"],
   tzService: ["@mozilla.org/calendar/timezone-service;1", "calITimezoneService"],
 };
+function calendarModule() {
+  const { cal } = ChromeUtils.importESModule("resource:///modules/calendar/calUtils.sys.mjs");
+  if (!cal) throw new Error("Thunderbird calendar module is unavailable");
+  return cal;
+}
+
 function svc(name) {
   if (name === "manager") {
-    const { cal } = ChromeUtils.importESModule("resource:///modules/calendar/calUtils.sys.mjs");
-    if (!cal || !cal.manager) throw new Error("Thunderbird calendar manager is unavailable");
-    return cal.manager;
+    const manager = calendarModule().manager;
+    if (!manager) throw new Error("Thunderbird calendar manager is unavailable");
+    return manager;
   }
   const [contract, iface] = SERVICES[name];
   return Cc[contract].getService(Ci[iface]);
@@ -57,12 +60,15 @@ function svc(name) {
  * Throws on unusable input so callers surface a clean error.
  */
 function makeDateTime(iso, tz) {
+  if (typeof iso !== "string" || !iso.trim()) {
+    throw new Error("date value is required");
+  }
   const dateValue = new Date(iso);
   if (isNaN(dateValue.getTime())) {
     throw new Error(`invalid date value: ${iso}`);
   }
   const dt = Cc["@mozilla.org/calendar/datetime;1"].createInstance(Ci.calIDateTime);
-  dt.timezone = tz || svc("tzService").getTimezone("floating");
+  dt.timezone = tz || calendarModule().dtz.floating;
   dt.year = dateValue.getFullYear();
   dt.month = dateValue.getMonth();
   dt.day = dateValue.getDate();
@@ -204,15 +210,14 @@ this.BridgeParent = class extends ExtensionAPI {
               ? Cc["@mozilla.org/calendar/todo;1"].createInstance(Ci.calITodo)
               : Cc["@mozilla.org/calendar/event;1"].createInstance(Ci.calIEvent);
 
-            item.calendar = target.superCalendar;
             item.title = details.title || "KeywordCal item";
-            if (details.description) item.description = details.description;
-            if (details.category) item.categories = [details.category];
+            if (details.description) item.descriptionText = details.description;
+            if (details.category) item.setCategories([details.category]);
             if (details.uid) item.setProperty("UID", details.uid);
 
             let tz = null;
             try {
-              const tzName = target.defaultTimezone?.name || "floating";
+              const tzName = target.defaultTimezone?.tzid || target.defaultTimezone?.name || "floating";
               tz = svc("tzService").getTimezone(tzName);
             } catch (e) {
               warn("timezone lookup failed, using floating:", e);
