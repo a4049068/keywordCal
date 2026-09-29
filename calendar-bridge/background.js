@@ -112,7 +112,8 @@ async function handle(message, sender) {
 
   log(`relaying ${method} to experiment API`);
   try {
-    return await api[method](method === "listCalendars" ? undefined : message.item || {});
+    const args = method === "listCalendars" ? [] : [message.item || {}];
+    return await api[method](...args);
   } catch (err) {
     warn(`${method} threw:`, err);
     return { ok: false, error: String(err) };
