@@ -4,16 +4,25 @@
 "use strict";
 
 const RuleEngine = {
+  /**
+   * Evaluate a message against rules. Returns the results for the LAST
+   * rule that matched (used by the toolbar popup to show what happened),
+   * or null when nothing matched.
+   */
   async evaluate(messageContext, rules) {
+    let lastResults = null;
+
     for (const rule of rules) {
       const matched = this._matchConditions(messageContext, rule);
 
       if (matched) {
         console.log(`[KeywordCal] Rule "${rule.name}" matched message "${messageContext.subject}"`);
 
+        const results = [];
         for (const action of rule.actions) {
-          await this._executeAction(messageContext, action);
+          results.push(await this._executeAction(messageContext, action));
         }
+        lastResults = { ruleName: rule.name, results };
 
         // Update last triggered timestamp
         rule.lastTriggered = new Date().toISOString();
@@ -22,6 +31,8 @@ const RuleEngine = {
         if (rule.stopProcessing) break;
       }
     }
+
+    return lastResults;
   },
 
   _matchConditions(msg, rule) {

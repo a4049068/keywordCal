@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { width: 340px; margin: 0; font: message-box; }
+    body { padding: 10px 12px; }
+    h1 { font-size: 14px; margin: 0 0 6px; }
+    .status { font-size: 12px; color: #555; margin-bottom: 8px; line-height: 1.5; }
+    .warn { color: #b35900; }
+    button {
+      display: block; width: 100%; margin: 4px 0; padding: 6px 8px;
+      font-size: 13px; text-align: left;
+    }
+    #result { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+    .ok { color: #2e7d32; }
+    .err { color: #c62828; }
+    ul { margin: 4px 0; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <h1>KeywordCal</h1>
+  <div id="status" class="status">Loading…</div>
+
+  <button id="test-btn" title="Check which rules match the selected message — creates nothing">
+    ▶ Test rules on selected message
+  </button>
+  <button id="run-btn" title="Run all matching rules on the selected message and create calendar items">
+    ⚡ Run now on selected message
+  </button>
+  <button id="options-btn">⚙ Manage rules…</button>
+
+  <div id="result"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -95,7 +95,15 @@ function addActionRow(action = {}) {
   block.querySelector(".action-date-pattern").value = action.datePattern || "";
   block.querySelector(".action-duration").value = action.durationMinutes ?? 60;
   block.querySelector(".action-reminders").value = (action.reminderMinutes || []).join(", ");
-  block.querySelector(".action-calendar").value = action.calendarId || "default";
+  const calSelect = block.querySelector(".action-calendar");
+  const calManual = block.querySelector(".action-calendar-manual");
+  const wantedCal = action.calendarId || "default";
+  if (wantedCal !== "default" && !knownCalendars.some((c) => c.id === wantedCal)) {
+    calManual.value = wantedCal; // custom name/id typed by the user
+  }
+  fillCalendarSelect(calSelect, wantedCal);
+  syncCalendarControl(block);
+  calManual.addEventListener("input", () => syncCalendarControl(block));
   block.querySelector(".action-category").value = action.category || "";
   block.querySelector(".remove-action").addEventListener("click", () => block.remove());
   elements.actionsContainer.appendChild(block);
@@ -122,12 +130,53 @@ function collectActions() {
       .split(",")
       .map((s) => parseInt(s.trim(), 10))
       .filter((n) => !Number.isNaN(n)),
-    calendarId: block.querySelector(".action-calendar").value || "default",
+    calendarId: getBlockCalendarId(block),
     category: block.querySelector(".action-category").value || undefined,
   }));
 }
 
 // ---------- Editor ----------
+
+// Calendar picker: populated from the Calendar Bridge when available.
+let knownCalendars = []; // [{ id, name }]
+
+async function refreshCalendarList() {
+  try {
+    const res = await browser.runtime.sendMessage({ type: "keywordcal:listCalendars" });
+    knownCalendars = (res && res.calendars) || [];
+  } catch (e) {
+    knownCalendars = [];
+  }
+}
+
+function fillCalendarSelect(select, current) {
+  select.innerHTML = "";
+  const mk = (value, label) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    select.appendChild(o);
+  };
+  mk("default", "Default calendar");
+  for (const c of knownCalendars) mk(c.id, `${c.name}${c.canWrite === false ? " (read-only)" : ""}`);
+  if (current && current !== "default" && !knownCalendars.some((c) => c.id === current)) {
+    mk(current, `${current} (custom)`);
+  }
+  select.value = [...select.options].some((o) => o.value === current) ? current : "default";
+}
+
+function syncCalendarControl(block) {
+  const sel = block.querySelector(".action-calendar");
+  const manual = block.querySelector(".action-calendar-manual");
+  const useManual = manual.value.trim() !== "";
+  sel.disabled = useManual;
+  if (useManual) sel.selectedIndex = 0;
+}
+
+function getBlockCalendarId(block) {
+  const manual = block.querySelector(".action-calendar-manual").value.trim();
+  return manual || block.querySelector(".action-calendar").value || "default";
+}
 
 function openEditor(rule = null) {
   editingRuleId = rule ? rule.id : null;
@@ -196,6 +245,11 @@ async function saveRule(event) {
 
 // ---------- Wire up ----------
 
+async function init() {
+  await refreshCalendarList(); // populate picker before first render
+  renderRuleList();
+}
+
 elements.addRuleBtn.addEventListener("click", () => openEditor());
 elements.cancelBtn.addEventListener("click", closeEditor);
 elements.form.addEventListener("submit", saveRule);
@@ -208,4 +262,4 @@ elements.restoreDefaultsBtn.addEventListener("click", async () => {
   }
 });
 
-renderRuleList();
+init();

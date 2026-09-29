@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "__MSG_extensionDescription__",
   "default_locale": "en",
   "author": "Your Name",
@@ -17,10 +17,12 @@
     "accountsRead",
     "storage",
     "notifications",
-    "compose"
+    "compose",
+    "tabs"
   ],
-  "compose_action": {
-    "default_title": "KeywordCal"
+  "browser_action": {
+    "default_title": "KeywordCal",
+    "default_popup": "popup/popup.html"
   },
   "background": {
     "scripts": [
