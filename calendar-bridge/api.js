@@ -7,10 +7,12 @@
 /**
  * KeywordCal Calendar Bridge — privileged experiment API (parent process).
  *
- * Provides exactly two functions to this add-on's own background script:
+ * Provides three functions to this add-on's own background script:
  *   listCalendars() -> [{ id, name, type, color, canWrite }]
  *   createItem({ calendarId, kind, ... }) -> { ok, id, calendarName }
  *                                          | { ok:false, error }
+ *   deleteItem({ calendarId, itemId })    -> { ok } | { ok:false, error }
+ * (deleteItem powers KeywordCal's "Undo last action" feature.)
  *
  * Everything here uses plain XPCOM contracts only — no ES-module imports,
  * no ChromeUtils/Cu (those are unavailable inside the WebExtension sandbox
@@ -194,15 +196,54 @@ class BridgeParent extends ExtensionAPI {
             }
 
             await item.addItem({});
+            // hashId is a stable numeric id derived from the UID — unique per
+            // item. item.id is empty until the backend assigns one (often
+            // async for CalDAV), so prefer hashId for reliable undo.
             const result = {
               ok: true,
-              id: item.hashId || item.id || "(assigned)",
+              id: String(item.hashId ?? item.id ?? ""),
               calendarName: target.name,
             };
             log("createItem succeeded:", JSON.stringify(result));
             return result;
           } catch (err) {
             errlog("createItem failed:", err);
+            return { ok: false, error: String(err) };
+          }
+        },
+
+        async deleteItem(details) {
+          log("deleteItem called:", JSON.stringify(details));
+          try {
+            const wanted = String((details && details.itemId) || "");
+            if (!wanted) return { ok: false, error: "no itemId given" };
+
+            const { cal: target, error } = resolveCalendar(
+              details.calendarId,
+              details.kind === "task" ? "task" : "event"
+            );
+            if (error) {
+              warn("deleteItem refused:", error);
+              return { ok: false, error };
+            }
+
+            const items = await target.getItems(null, null);
+            // Match by numeric hashId first (what createItem returned), then
+            // fall back to UID / backend id so hand-edited items still match.
+            const hit = Array.from(items).find(
+              (i) =>
+                String(i.hashId) === wanted ||
+                (i.getProperty("UID") || "") === wanted ||
+                (i.id || "") === wanted
+            );
+            if (!hit) {
+              return { ok: false, error: `item "${wanted}" not found in "${target.name}"` };
+            }
+            await hit.deleteItem();
+            log(`deleteItem removed "${hit.title}" from "${target.name}"`);
+            return { ok: true, title: hit.title, calendarName: target.name };
+          } catch (err) {
+            errlog("deleteItem failed:", err);
             return { ok: false, error: String(err) };
           }
         },

@@ -15,7 +15,7 @@
  *      messaging is blocked by default privacy prefs, so we do NOT rely
  *      on it).
  *   2. Serve KeywordCal's messages: { keywordcal: "registry" } -> our id;
- *      { method: "listCalendars" | "createItem", item? } -> forwarded to
+ *      { method: "listCalendars" | "createItem" | "deleteItem", item? } -> forwarded to
  *      the privileged BridgeParent experiment API defined in api.js.
  *
  * Only requests from KeywordCal itself are served; everything else is
@@ -44,7 +44,8 @@ function isForeignNoise(message) {
   // Generic heuristic: anything that isn't our known protocol shape.
   return !(message.keywordcal === "registry" ||
     message.method === "listCalendars" ||
-    message.method === "createItem");
+    message.method === "createItem" ||
+    message.method === "deleteItem");
 }
 
 function log(...args) { console.log(LOG_PREFIX, ...args); }
@@ -100,11 +101,11 @@ async function handle(message, sender) {
 
   if (message.keywordcal === "registry") {
     log("registry probe answered");
-    return { extensionId: BRIDGE_ID, methods: ["listCalendars", "createItem"] };
+    return { extensionId: BRIDGE_ID, methods: ["listCalendars", "createItem", "deleteItem"] };
   }
 
   const method = message.method;
-  if (method !== "listCalendars" && method !== "createItem") {
+  if (!["listCalendars", "createItem", "deleteItem"].includes(method)) {
     warn(`unknown method "${method}" — ignoring`);
     return undefined;
   }
@@ -119,7 +120,7 @@ async function handle(message, sender) {
   try {
     return method === "listCalendars"
       ? await api.listCalendars()
-      : await api.createItem(message.item || {});
+      : await api[method](message.item || {});
   } catch (err) {
     warn(`${method} threw:`, err);
     return { ok: false, error: String(err) };

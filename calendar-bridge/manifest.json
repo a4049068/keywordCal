@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.6.2",
+  "version": "3.7.0",
   "description": "Companion add-on that gives KeywordCal direct write access to Thunderbird calendars: events/tasks are filed silently into the calendar you pick per rule, with no compose windows. Install alongside KeywordCal.",
   "homepage_url": "https://example.com/keywordcal/",
   "developer": {
@@ -23,13 +23,22 @@
       "name": "BridgeParent",
       "schema": "schema.json",
       "parent": {
-        "scopes": ["main", "addon_parent"],
-        "paths": [["BridgeParent"]],
+        "scopes": [
+          "main",
+          "addon_parent"
+        ],
+        "paths": [
+          [
+            "BridgeParent"
+          ]
+        ],
         "script": "api.js"
       }
     }
   },
   "background": {
-    "scripts": ["background.js"]
+    "scripts": [
+      "background.js"
+    ]
   }
 }

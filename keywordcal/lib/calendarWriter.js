@@ -21,8 +21,31 @@
  */
 
 const BRIDGE_REGISTRY_MSG = { keywordcal: "registry" };
-const BRIDGE_METHODS = ["listCalendars", "createItem"];
+const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem"];
 const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
+
+// Undo queue (design doc §9): every item the bridge files for us is pushed
+// here so the user can revert the most recent one from the toolbar popup.
+const UNDO_KEY = "keywordcal_undo_queue";
+const UNDO_TTL_MS = 24 * 60 * 60 * 1000; // entries older than a day expire
+const UNDO_MAX = 50;
+
+// Duplicate-delivery guard (design doc §9 rate limiting): IMAP re-fetches and
+// folder resyncs can hand us the same message twice within seconds. One
+// in-process Map suffices — its sole purpose is suppressing sub-minute
+// duplicates, which never survive a restart anyway.
+const DEDUPE_WINDOW_MS = 3 * 60 * 1000;
+const _seenMessages = new Map(); // messageId -> last processed epoch ms
+
+function shouldSkipDuplicate(messageId) {
+  const now = Date.now();
+  for (const [id, t] of _seenMessages) {
+    if (now - t > DEDUPE_WINDOW_MS) _seenMessages.delete(id);
+  }
+  if (_seenMessages.has(messageId)) return true;
+  _seenMessages.set(messageId, now);
+  return false;
+}
 
 const CalendarWriter = {
   _bridgeId: null,
@@ -104,6 +127,73 @@ const CalendarWriter = {
   },
 
   /**
+   * Send a method request to the bridge. Returns the reply, or null when no
+   * bridge is available / it failed hard (caller decides on fallback).
+   */
+  async _bridgeCall(payload, label) {
+    const bridgeId = await this.findBridge();
+    if (!bridgeId) return null;
+    try {
+      console.log(`[KeywordCal] -> bridge(${bridgeId}) ${label}`);
+      const reply = await browser.runtime.sendMessage(bridgeId, payload);
+      console.log(`[KeywordCal] <- bridge ${label}: ${JSON.stringify(reply)}`);
+      return reply;
+    } catch (err) {
+      console.warn(`[KeywordCal] Bridge ${label} failed:`, err);
+      this.forgetBridge();
+      return null;
+    }
+  },
+
+  // ---------- Undo queue ----------
+
+  async pushUndo(entry) {
+    // entry: { itemId, calendarId, kind, title, at }
+    try {
+      const data = (await browser.storage.local.get(UNDO_KEY)) || {};
+      const queue = Array.isArray(data[UNDO_KEY]) ? data[UNDO_KEY] : [];
+      queue.push({ ...entry, at: Date.now() });
+      while (queue.length > UNDO_MAX) queue.shift();
+      await browser.storage.local.set({ [UNDO_KEY]: queue });
+      console.log(`[KeywordCal] undo queue: ${queue.length} entr(y/ies), last "${entry.title}"`);
+    } catch (e) {
+      console.warn("[KeywordCal] could not persist undo queue:", e);
+    }
+  },
+
+  /** Most recent non-expired undo entry, or null. */
+  async peekUndo() {
+    const data = (await browser.storage.local.get(UNDO_KEY)) || {};
+    const queue = Array.isArray(data[UNDO_KEY]) ? data[UNDO_KEY] : [];
+    const fresh = queue.filter((e) => Date.now() - (e.at || 0) < UNDO_TTL_MS);
+    return fresh.length ? fresh[fresh.length - 1] : null;
+  },
+
+  /**
+   * Delete the most recent bridge-created item. Returns
+   * { ok:true, title } | { ok:false, error } | null (no bridge / nothing to undo).
+   */
+  async undoLast() {
+    const entry = await this.peekUndo();
+    if (!entry) return { ok: false, error: "nothing to undo" };
+    const reply = await this._bridgeCall(
+      { method: "deleteItem", item: { calendarId: entry.calendarId, itemId: entry.itemId, kind: entry.kind } },
+      `deleteItem "${entry.title}"`
+    );
+    if (!reply) return { ok: false, error: "calendar bridge unavailable" };
+    if (reply.ok) {
+      // Drop exactly this entry from the queue.
+      const data = (await browser.storage.local.get(UNDO_KEY)) || {};
+      const queue = Array.isArray(data[UNDO_KEY]) ? data[UNDO_KEY] : [];
+      const idx = queue.findIndex((e) => e.itemId === entry.itemId);
+      if (idx !== -1) queue.splice(idx, 1);
+      await browser.storage.local.set({ [UNDO_KEY]: queue });
+      this._notify(`Reverted: deleted "${entry.title}" from ${reply.calendarName || "calendar"}.`);
+    }
+    return reply;
+  },
+
+  /**
    * Resolve an action's calendarId ("default", a bridge calendar id, or a
    * free-text name typed in the options UI) to a human-readable display
    * name. Falls back to "Default calendar" / the raw string when unknown.
@@ -122,52 +212,43 @@ const CalendarWriter = {
    * or null when no bridge is available.
    */
   async listCalendars() {
-    const bridgeId = await this.findBridge();
-    if (!bridgeId) return null;
-    try {
-      const reply = await browser.runtime.sendMessage(bridgeId, { method: "listCalendars" });
-      // A handler that returns nothing (or an unexpected payload) must not
-      // be mistaken for "the bridge is broken" — keep the cached id then.
-      return Array.isArray(reply) ? reply : null;
-    } catch (err) {
-      console.warn("[KeywordCal] Bridge listCalendars failed:", err);
-      this.forgetBridge();
-      return null;
-    }
+    const reply = await this._bridgeCall({ method: "listCalendars" }, "listCalendars");
+    // A handler that returns nothing (or an unexpected payload) must not be
+    // mistaken for "the bridge is broken" — keep the cached id then.
+    return Array.isArray(reply) ? reply : null;
   },
 
   /**
    * Send a createItem request to the bridge. Returns the bridge's result
    * object ({ ok, id, calendarName } / { ok:false, error }) or null if no
-   * bridge/failed hard.
+   * bridge/failed hard. On success the item is pushed onto the undo queue.
    */
   async _bridgeCreate(item) {
-    const bridgeId = await this.findBridge();
-    if (!bridgeId) return null;
-    try {
-      console.log(`[KeywordCal] -> bridge(${bridgeId}) createItem "${item.title}" into "${item.calendarId}"`);
-      const created = await browser.runtime.sendMessage(bridgeId, {
-        method: "createItem",
-        item,
-      });
-      if (created && typeof created.ok === "boolean") {
-        if (created.ok && !created.calendarName) {
+    console.log(`[KeywordCal] -> bridge createItem "${item.title}" into "${item.calendarId}"`);
+    const created = await this._bridgeCall({ method: "createItem", item }, `createItem "${item.title}"`);
+    if (created && typeof created.ok === "boolean") {
+      if (created.ok) {
+        if (!created.calendarName) {
           created.calendarName = await this._calendarLabel(item.calendarId);
         }
-        console.log(`[KeywordCal] <- bridge createItem: ${JSON.stringify(created)}`);
-        return created;
+        if (created.id) {
+          await this.pushUndo({
+            itemId: created.id,
+            calendarId: item.calendarId,
+            kind: item.kind,
+            title: item.title,
+          });
+        }
       }
-      console.warn("[KeywordCal] Bridge returned an unexpected response:", created);
-      // An unresponsive/updated bridge answers with undefined — treat as
-      // absent so the caller falls back to the .ics compose draft instead
-      // of silently dropping the event.
-      this.forgetBridge();
-      return null;
-    } catch (err) {
-      console.warn("[KeywordCal] Bridge createItem failed:", err);
-      this.forgetBridge();
-      return null;
+      console.log(`[KeywordCal] <- bridge createItem: ${JSON.stringify(created)}`);
+      return created;
     }
+    // An unresponsive/updated bridge answers with undefined — treat as
+    // absent so the caller falls back to the .ics compose draft instead
+    // of silently dropping the event.
+    console.warn("[KeywordCal] Bridge returned an unexpected response:", created);
+    this.forgetBridge();
+    return null;
   },
 
   /**

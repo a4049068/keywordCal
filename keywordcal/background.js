@@ -86,8 +86,12 @@ browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
   if (rules.length === 0) return;
 
   for (const message of messages) {
-    try {
-      const messageContext = await buildMessageContext(message.id);
+      if (shouldSkipDuplicate(message.id)) {
+        console.log(`[KeywordCal] Skipping duplicate delivery of message ${message.id} (within ${DEDUPE_WINDOW_MS / 1000}s window)`);
+        continue;
+      }
+      try {
+        const messageContext = await buildMessageContext(message.id);
       await RuleEngine.evaluate(messageContext, rules);
     } catch (err) {
       console.error(`[KeywordCal] Error processing message ${message.id}:`, err);
@@ -172,6 +176,16 @@ browser.runtime.onMessage.addListener(async (msg) => {
       if (error) return { ok: false, error };
       const result = await RuleEngine.evaluate(ctx, await RuleStore.getActiveRules());
       return { ok: true, subject: ctx.subject, result };
+    }
+
+    case "keywordcal:getUndoStatus": {
+      const entry = await CalendarWriter.peekUndo();
+      return { available: !!entry, entry };
+    }
+
+    case "keywordcal:undoLast": {
+      const res = await CalendarWriter.undoLast();
+      return res || { ok: false, error: "calendar bridge unavailable" };
     }
 
     case "keywordcal:listCalendars": {

@@ -6,6 +6,7 @@
 
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
+const undoBtn = document.getElementById("undo-btn");
 
 // Every sendMessage here must be wrapped: if the background script is
 // momentarily unavailable (add-on just updated/reloaded), a raw await would
@@ -39,9 +40,36 @@ async function loadStatus() {
     const names = (s.calendars || []).map((c) => c.name).join(", ");
     if (names) lines.push(`Calendars reachable: ${names}`);
   }
+  // Undo availability
+  try {
+    const u = await send({ type: "keywordcal:getUndoStatus" });
+    if (u && u.available && u.entry) {
+      undoBtn.disabled = false;
+      undoBtn.textContent = `\u21A9 Undo: "${(u.entry.title || "").slice(0, 28)}"`;
+      lines.push(`Last created: "${u.entry.title}" (${new Date(u.entry.at).toLocaleTimeString()})`);
+    } else {
+      undoBtn.disabled = true;
+      undoBtn.textContent = "\u21A9 Undo last action";
+    }
+  } catch (e) { /* leave button disabled */ }
+
   statusEl.textContent = lines.join("\n");
   statusEl.style.whiteSpace = "pre-wrap";
 }
+
+undoBtn.addEventListener("click", async () => {
+  undoBtn.disabled = true;
+  resultEl.textContent = "Reverting\u2026";
+  const res = await send({ type: "keywordcal:undoLast" });
+  if (res && res.ok) {
+    resultEl.className = "ok";
+    resultEl.textContent = `Deleted "${res.title || "item"}" from ${res.calendarName || "calendar"}.`;
+  } else {
+    resultEl.className = "err";
+    resultEl.textContent = (res && res.error) || "Undo failed \u2014 no response.";
+  }
+  loadStatus();
+});
 
 document.getElementById("test-btn").addEventListener("click", async () => {
   resultEl.textContent = "Testing…";

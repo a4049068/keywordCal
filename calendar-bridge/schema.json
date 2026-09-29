@@ -14,11 +14,21 @@
           "items": {
             "type": "object",
             "properties": {
-              "id": { "type": "string" },
-              "name": { "type": "string" },
-              "type": { "type": "string" },
-              "color": { "type": "string" },
-              "canWrite": { "type": "boolean" }
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "canWrite": {
+                "type": "boolean"
+              }
             }
           }
         }
@@ -27,6 +37,23 @@
         "name": "createItem",
         "type": "function",
         "description": "Create an event or task in the named calendar.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
+        "name": "deleteItem",
+        "type": "function",
+        "description": "Delete an item (by hashId/UID) from the named calendar \u2014 powers KeywordCal's undo.",
         "async": true,
         "parameters": [
           {
