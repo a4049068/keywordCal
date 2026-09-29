@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.5.2",
+  "version": "3.5.3",
   "permissions": [
     "storage"
   ],
@@ -29,7 +29,11 @@
             "name": "createItem",
             "type": "function",
             "parameters": [
-              { "name": "item", "type": "object", "additionalProperties": true }
+              {
+                "name": "item",
+                "type": "object",
+                "additionalProperties": true
+              }
             ]
           }
         ]
@@ -40,17 +44,21 @@
         "name": "BridgeParent",
         "schema": {},
         "parent": {
-          "scopes": ["addon_parent"],
-          "paths": [["BridgeParent"]],
+          "scopes": [
+            "addon_parent"
+          ],
+          "paths": [
+            [
+              "BridgeParent"
+            ]
+          ],
           "script": "api.js"
+        },
+        "options": {
+          "context_in_parent": true,
+          "addon_parent:parentAPI.ExtensionAPI": []
         }
       }
-    ]
-  },
-  "background": {
-    "scripts": [
-      "api.js",
-      "background.js"
     ]
   }
 }

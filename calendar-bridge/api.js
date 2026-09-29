@@ -5,51 +5,29 @@
 /**
  * KeywordCal Calendar Bridge - privileged experiment API (parent process).
  *
- * MailExtensions cannot touch the calendar subsystem, so this tiny companion
- * add-on exposes it through an "experiment" API:
- *
- *   - listCalendars() -> [{ id, name, color, canWrite }]
+ *   - listCalendars() -> [{ id, name, type, color, canWrite }]
  *   - createItem({ calendarId, kind, ... }) -> { ok, id } | { ok:false, error }
  *
- * Everything happens locally in Thunderbird via calICSocalICal; no network
- * I/O is performed here. A remote (e.g. Google CalDAV) calendar only gets a
- * normal item-add request, which is the same operation a user performing
- * "New Event" would trigger.
+ * All calendar work happens locally via Thunderbird's calendar manager; no
+ * network I/O is performed here. The base ExtensionAPI class is provided by
+ * the mixin declared in manifest.json ("addon_parent:parentAPI.ExtensionAPI"),
+ * so this sandboxed script needs no ChromeUtils/Cu/Components imports at all.
  */
 
-// Experiment API scripts run in a restricted sandbox where ChromeUtils and Cu
-// are NOT defined. The supported pattern (used by Thunderbird's own built-in
-// experiments) is to grab the Components globals via the global "Components"
-// object — no ChromeUtils at all.
-const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
+// Experiment API scripts run in a restricted sandbox without ChromeUtils/Cu.
+// The documented pattern (used by Thunderbird's own built-in experiments) is
+// to destructure Cc/Ci from the global Components object; ExtensionAPI itself
+// comes from the mixin declared in manifest.json options.
+const { classes: Cc, interfaces: Ci } = Components;
 
-// ExtensionParent.sys.mjs is an ES module, so it cannot be loaded with
-// Cu.import or jssubscript-loader from this sandbox. Instead we obtain the
-// ExtensionAPI base class lazily through the addon manager's principal: the
-// experiment loader evaluates this script against a scope whose global has
-// `Components` available, and we can reach the ES-module loader indirectly
-// via Services from the JSM shim.
-let _ExtensionAPI = null;
-function getBaseExtensionAPI() {
-  if (_ExtensionAPI) return _ExtensionAPI;
-  // resource://gre/modules/Services.jsm is still a JSM and importable.
-  const { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
-  try {
-    // Use the mozIJSSubScriptLoader on the .sys.mjs file: these files begin
-    // with export statements which loadSubScript tolerates when evaluated
-    // into a plain object scope in TB 128 (the exports land on the scope).
-    const loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
-      .getService(Ci.mozIJSSubScriptLoader);
-    const scope = {};
-    loader.loadSubScript("resource://gre/modules/ExtensionParent.sys.mjs", scope, "utf8");
-    _ExtensionAPI = scope.ExtensionAPI || null;
-  } catch (e) {
-    _ExtensionAPI = null;
+let _cal = null; // lazy calICSocalICal ES-module namespace
+
+async function getCal() {
+  if (!_cal) {
+    const mod = await import("resource:///modules/calendar/utils/calICSocalICal.sys.mjs");
+    _cal = mod.cal;
   }
-  if (!_ExtensionAPI) {
-    throw new Error("KeywordCal Bridge: could not load ExtensionAPI (ExtensionParent.sys.mjs)");
-  }
-  return _ExtensionAPI;
+  return _cal;
 }
 
 function getRegistry() {
@@ -59,8 +37,7 @@ function getRegistry() {
 /**
  * Resolve a calendar by id, exact name, or case-insensitive substring.
  * "default"/empty resolves to the default event/task calendar, falling
- * back to the first writable local calendar. Returns
- * { cal } or { error }.
+ * back to the first writable local calendar. Returns { cal } or { error }.
  */
 function resolveCalendar(wanted, kind) {
   const calendars = getRegistry().getCalendars();
@@ -79,7 +56,7 @@ function resolveCalendar(wanted, kind) {
           ? mgr.getDefaultTaskCalendar?.()
           : mgr.getDefaultCalendar?.();
     } catch (e) {
-      /* older/newer manager shape — fall through to heuristics */
+      /* older/newer manager shape - fall through to heuristics */
     }
     const cal =
       (def && calendars.find((c) => c.id === def.id)) ||
@@ -102,7 +79,7 @@ function resolveCalendar(wanted, kind) {
   return { cal };
 }
 
-class BridgeParent extends getBaseExtensionAPI() {
+class BridgeParent extends ExtensionAPI {
   getAPI(context) {
     return {
       BridgeParent: {
@@ -125,7 +102,8 @@ class BridgeParent extends getBaseExtensionAPI() {
             );
             if (error) return { ok: false, error };
 
-            const item = isTask ? cal.createTask() : cal.createEvent();
+            const calNamespace = await getCal();
+            const item = isTask ? calNamespace.createTask() : calNamespace.createEvent();
             item.calendar = cal.superCalendar;
 
             item.title = details.title || "KeywordCal item";
@@ -133,13 +111,15 @@ class BridgeParent extends getBaseExtensionAPI() {
             if (details.category) item.categories = [details.category];
             if (details.uid) item.setProperty("UID", details.uid);
 
-            const tz = cal.defaultTimezone || undefined;
+            const tzService = Cc["@mozilla.org/calendar/timezone-service;1"]
+              .getService(Ci.calITimezoneService);
+            const localTz =
+              tzService.getTimezone(cal.defaultTimezone?.name || "floating") ||
+              tzService.getTimezone("floating");
+
             const makeDt = (iso) => {
-              const dt = Cc["@mozilla.org/calendar/datetime;1"].createInstance(
-                Ci.calIDateTime
-              );
-              dt.timezone = tz;
-              dt.dateValue = new Date(iso);
+              const d = new Date(iso);
+              const dt = calNamespace.DateTime.fromJavaScriptDate(d, localTz);
               return dt;
             };
 
