@@ -4,6 +4,17 @@
  */
 "use strict";
 
+// Keep the toolbar badge fresh: this page writes rules, and in MV2 each
+// document has its own globals, so call the background script after every
+// storage mutation.
+async function refreshBadge() {
+  try {
+    await browser.runtime.sendMessage({ type: "keywordcal:refreshBadge" });
+  } catch (e) {
+    /* background may be momentarily unavailable — best-effort */
+  }
+}
+
 const elements = {
   ruleList: document.getElementById("rule-list"),
   emptyHint: document.getElementById("empty-hint"),
@@ -50,6 +61,7 @@ async function renderRuleList() {
 
     const toggleBtn = makeButton(rule.enabled ? "Disable" : "Enable", "small secondary", async () => {
       await RuleStore.updateRule({ id: rule.id, enabled: !rule.enabled });
+      await refreshBadge();
       renderRuleList();
     });
 
@@ -57,6 +69,7 @@ async function renderRuleList() {
     const delBtn = makeButton("Delete", "small danger", async () => {
       if (confirm(`Delete rule "${rule.name}"?`)) {
         await RuleStore.deleteRule(rule.id);
+        await refreshBadge();
         renderRuleList();
       }
     });
@@ -93,6 +106,7 @@ function addActionRow(action = {}) {
   block.querySelector(".action-desc-template").value = action.descriptionTemplate ?? "{sender}";
   block.querySelector(".action-date-source").value = action.dateSource || "extract";
   block.querySelector(".action-date-pattern").value = action.datePattern || "";
+  block.querySelector(".action-fixed-offset").value = action.fixedOffsetDays ?? 0;
   block.querySelector(".action-duration").value = action.durationMinutes ?? 60;
   block.querySelector(".action-reminders").value = (action.reminderMinutes || []).join(", ");
   const calSelect = block.querySelector(".action-calendar");
@@ -118,21 +132,26 @@ function collectConditions() {
 }
 
 function collectActions() {
-  return [...elements.actionsContainer.querySelectorAll(".action-block")].map((block) => ({
-    type: block.querySelector(".action-type").value,
-    titleTemplate: block.querySelector(".action-title-template").value,
-    descriptionTemplate: block.querySelector(".action-desc-template").value,
-    dateSource: block.querySelector(".action-date-source").value,
-    datePattern: block.querySelector(".action-date-pattern").value || undefined,
-    durationMinutes: Number(block.querySelector(".action-duration").value) || 0,
-    reminderMinutes: block
-      .querySelector(".action-reminders").value
-      .split(",")
-      .map((s) => parseInt(s.trim(), 10))
-      .filter((n) => !Number.isNaN(n)),
-    calendarId: getBlockCalendarId(block),
-    category: block.querySelector(".action-category").value || undefined,
-  }));
+  return [...elements.actionsContainer.querySelectorAll(".action-block")].map((block) => {
+    const dateSource = block.querySelector(".action-date-source").value;
+    const fixedOffset = parseInt(block.querySelector(".action-fixed-offset").value, 10);
+    return {
+      type: block.querySelector(".action-type").value,
+      titleTemplate: block.querySelector(".action-title-template").value,
+      descriptionTemplate: block.querySelector(".action-desc-template").value,
+      dateSource,
+      datePattern: block.querySelector(".action-date-pattern").value || undefined,
+      fixedOffsetDays: dateSource === "fixed" && Number.isFinite(fixedOffset) ? fixedOffset : undefined,
+      durationMinutes: Number(block.querySelector(".action-duration").value) || 0,
+      reminderMinutes: block
+        .querySelector(".action-reminders").value
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !Number.isNaN(n)),
+      calendarId: getBlockCalendarId(block),
+      category: block.querySelector(".action-category").value || undefined,
+    };
+  });
 }
 
 // ---------- Editor ----------
@@ -239,6 +258,7 @@ async function saveRule(event) {
     await RuleStore.addRule(ruleData);
   }
 
+  await refreshBadge();
   closeEditor();
   renderRuleList();
 }
@@ -258,6 +278,7 @@ elements.addActionBtn.addEventListener("click", () => addActionRow());
 elements.restoreDefaultsBtn.addEventListener("click", async () => {
   if (confirm("Add the four example rules to your rule list?")) {
     await RuleStore.seedDefaults(true);
+    await refreshBadge();
     renderRuleList();
   }
 });

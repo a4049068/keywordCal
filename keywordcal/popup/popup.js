@@ -59,24 +59,34 @@ document.getElementById("run-btn").addEventListener("click", async () => {
     resultEl.textContent = (res && res.error) || "No response from background.";
     return;
   }
-  if (!res.result) {
+  const r = res.result;
+  // evaluate() now returns one entry per matched rule.
+  const firedRules = Array.isArray(r) ? r : (r ? [r] : []);
+  if (firedRules.length === 0) {
     resultEl.className = "ok";
     resultEl.textContent = `Ran on "${res.subject}" — no rules matched.`;
     return;
   }
-  const r = res.result;
-  const outcomes = (r.results || []).map((x) => {
-    if (!x) return "failed (see Error Console)";
-    if (x.ok) return `created in "${x.calendarName || "calendar"}"`;
-    if (x.fallback === "compose") return "opened .ics draft (no bridge)";
-    if (x.ok === false) return `error: ${x.error}`;
-    return "done";
-  });
+  const labelOutcome = (x) => {
+    const o = x && "outcome" in x ? x.outcome : x; // tolerate old/new shapes
+    const kind = (x && x.actionType) || "action";
+    if (!o) return `${kind}: failed (see Error Console)`;
+    if (o.ok === true) return `${kind}: created in "${o.calendarName || "calendar"}"`;
+    if (o.fallback === "compose") return `${kind}: opened .ics draft (no bridge)`;
+    if (o.ok === false) return `${kind}: error: ${o.error}`;
+    return `${kind}: done`;
+  };
   resultEl.className = "ok";
   resultEl.innerHTML =
-    `Rule <b>${escapeHtml(r.ruleName)}</b> fired:<ul>` +
-    outcomes.map((o) => `<li>${escapeHtml(o)}</li>`).join("") +
-    "</ul>Check your calendar or the notification.";
+    firedRules
+      .map(
+        (entry) =>
+          `Rule <b>${escapeHtml(entry.ruleName)}</b> fired:<ul>` +
+          (entry.results || []).map((x) => `<li>${escapeHtml(labelOutcome(x))}</li>`).join("") +
+          "</ul>"
+      )
+      .join("") +
+    "Check your calendar or the notification.";
 });
 
 document.getElementById("options-btn").addEventListener("click", () => {

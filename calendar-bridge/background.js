@@ -23,8 +23,13 @@ const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
 // id into KeywordCal's copy so discovery works even when cross-extension
 // messaging is blocked by privacy prefs. Re-seeded on startup/install
 // because a KeywordCal-side cleanup may clear it.
+//
+// NOTE: this requires the "storage" permission — without it,
+// browser.storage.local is undefined and the fallback channel silently
+// dies (and the uncaught TypeError at load time could abort the script).
 function registerWithKeywordCal() {
   try {
+    if (!browser.storage || !browser.storage.local) return;
     browser.storage.local
       .set({ keywordcal_bridge_id: BRIDGE_ID })
       .catch(() => {});

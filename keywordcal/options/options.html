@@ -123,9 +123,11 @@
         <select class="action-date-source">
           <option value="extract">Extract from body</option>
           <option value="received">Message received date</option>
-          <option value="fixed">Now</option>
+          <option value="fixed">Now (+ offset days)</option>
         </select>
         <input type="text" class="action-date-pattern" placeholder="date regex (optional)" />
+        <label>Offset (days)</label>
+        <input type="number" class="action-fixed-offset" step="1" min="-365" max="365" value="0" title="Only used with 'Now' date source: start the event this many days from today" />
       </div>
       <div class="row">
         <label>Duration (min)</label>

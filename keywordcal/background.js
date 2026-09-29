@@ -37,14 +37,22 @@ async function buildMessageContext(messageId) {
   const full = await browser.messages.getFull(messageId);
   const body = extractPlainText(full);
 
+  // Thunderbird's MsgHdrWithObject returns `recipients` as an array of
+  // address objects ({ displayName, email, type }), not strings — joining
+  // those directly would produce "[object Object]" in rules/templates.
+  const recipients = (header.recipients || [])
+    .map((r) => (typeof r === "string" ? r : r.email || r.displayName || ""))
+    .filter(Boolean)
+    .join(", ");
+
   return {
     id: messageId,
     subject: header.subject || "",
     sender: header.author || "",
-    recipients: (header.recipients || []).join(", "),
+    recipients,
     date: header.date ? new Date(header.date) : new Date(),
     body: body.slice(0, 50000), // Cap at 50KB
-    headers: header,
+    headers: header.headers || {}, // raw { name: [values] } map for header conditions
   };
 }
 
@@ -62,6 +70,9 @@ async function refreshBadge() {
   }
 }
 
+// Keep the badge in sync across every context that owns a copy of this
+// script (background page, options tab, popup): whenever the rule storage
+// key changes anywhere, recompute it.
 browser.storage.local.onChanged.addListener((changes) => {
   if (changes[RuleStore.STORAGE_KEY]) refreshBadge();
 });
@@ -85,6 +96,23 @@ browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
 });
 
 // ---------- Popup / cross-page message API ----------
+
+/**
+ * Find the tab holding the selected email. The toolbar popup lives in its
+ * own small window, so "currentWindow" would look at the popup itself and
+ * never find a messageId — query the main mail windows instead and return
+ * the first tab that actually has a message selected.
+ */
+async function getActiveMailTab() {
+  let tabs = [];
+  try {
+    tabs = await browser.tabs.query({ active: true, windows: ["normal"] });
+  } catch (e) {
+    // Older/newer Thunderbird without the `windows` filter — fall back.
+    tabs = await browser.tabs.query({ active: true });
+  }
+  return tabs.find((t) => t && t.messageId) || null;
+}
 
 browser.runtime.onMessage.addListener(async (msg) => {
   if (!msg || typeof msg !== "object") return;
@@ -113,7 +141,7 @@ browser.runtime.onMessage.addListener(async (msg) => {
       // Run the rule engine on the currently selected message WITHOUT
       // creating anything — returns which rules would match.
       try {
-        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        const tab = await getActiveMailTab();
         if (!tab || !tab.messageId) {
           return { ok: false, error: "Select a single email message first." };
         }
@@ -133,7 +161,7 @@ browser.runtime.onMessage.addListener(async (msg) => {
     case "keywordcal:executeOnSelected": {
       // Actually run the engine on the selected message (creates events).
       try {
-        const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+        const tab = await getActiveMailTab();
         if (!tab || !tab.messageId) {
           return { ok: false, error: "Select a single email message first." };
         }
@@ -150,6 +178,13 @@ browser.runtime.onMessage.addListener(async (msg) => {
       const bridgeId = await CalendarWriter.findBridge();
       const calendars = bridgeId ? await CalendarWriter.listCalendars() : null;
       return { bridgeInstalled: !!bridgeId, calendars: calendars || [] };
+    }
+
+    case "keywordcal:refreshBadge": {
+      // Called by the options page after it mutates rules (each document
+      // has its own globals in MV2, so RuleStore._write can't reach us).
+      await refreshBadge();
+      return { ok: true };
     }
 
     default:

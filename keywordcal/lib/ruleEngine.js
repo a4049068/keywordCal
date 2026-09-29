@@ -5,24 +5,31 @@
 
 const RuleEngine = {
   /**
-   * Evaluate a message against rules. Returns the results for the LAST
-   * rule that matched (used by the toolbar popup to show what happened),
-   * or null when nothing matched.
+   * Evaluate a message against rules. Returns an array of one result object
+   * per MATCHED rule ({ ruleName, results }) — empty array when nothing
+   * matched (used by the toolbar popup to show what happened).
    */
   async evaluate(messageContext, rules) {
-    let lastResults = null;
+    const allResults = [];
 
     for (const rule of rules) {
-      const matched = this._matchConditions(messageContext, rule);
+      const matchedConds = this._matchedConditions(messageContext, rule);
 
-      if (matched) {
+      if (matchedConds) {
         console.log(`[KeywordCal] Rule "${rule.name}" matched message "${messageContext.subject}"`);
+
+        // Expose the first matching condition's value so templates can use
+        // {keyword} (design doc §3.1). Copy so we never mutate the caller's
+        // rule objects.
+        const ctx = Object.assign({}, messageContext, {
+          keyword: matchedConds.length ? String(matchedConds[0].value) : "",
+        });
 
         const results = [];
         for (const action of rule.actions) {
-          results.push(await this._executeAction(messageContext, action));
+          results.push(await this._executeAction(ctx, action));
         }
-        lastResults = { ruleName: rule.name, results };
+        allResults.push({ ruleName: rule.name, results });
 
         // Update last triggered timestamp
         rule.lastTriggered = new Date().toISOString();
@@ -32,25 +39,40 @@ const RuleEngine = {
       }
     }
 
-    return lastResults;
+    return allResults;
+  },
+
+  /**
+   * Returns the list of conditions that passed when the rule matches
+   * (per matchType), or null when it does not match.
+   */
+  _matchedConditions(msg, rule) {
+    const passed = [];
+    for (const cond of rule.conditions) {
+      if (this._evaluateCondition(msg, cond)) passed.push(cond);
+    }
+
+    if (rule.matchType === "all") {
+      return passed.length === rule.conditions.length && rule.conditions.length > 0
+        ? passed
+        : null;
+    }
+    // "any"
+    return passed.length > 0 ? passed : null;
   },
 
   _matchConditions(msg, rule) {
-    const results = rule.conditions.map((cond) =>
-      this._evaluateCondition(msg, cond)
-    );
-
-    return rule.matchType === "all"
-      ? results.every(Boolean)
-      : results.some(Boolean);
+    return this._matchedConditions(msg, rule) !== null;
   },
 
   _evaluateCondition(msg, cond) {
     const fieldValue = this._getFieldValue(msg, cond);
+    // A missing/empty field simply fails every operator except notContains
+    // ("does not contain X" is true for an absent field).
     if (!fieldValue) return cond.operator === "notContains";
 
     const normalized = fieldValue.toLowerCase();
-    const target = cond.value.toLowerCase();
+    const target = (cond.value || "").toLowerCase();
 
     switch (cond.operator) {
       case "contains":
@@ -78,30 +100,39 @@ const RuleEngine = {
       case "sender":    return msg.sender;
       case "recipient": return msg.recipients;
       case "header": {
-        // value format: "Header-Name::pattern" — look up raw header value
-        const sep = cond.value.indexOf("::");
+        // value format: "Header-Name::pattern" — look up raw header value.
+        // Thunderbird's messages.get() returns headers as
+        // { "X-Foo": ["value1", "value2"] } (arrays of strings), but older
+        // shapes used plain strings — handle both.
+        const sep = (cond.value || "").indexOf("::");
         if (sep === -1) return "";
         const name = cond.value.slice(0, sep).toLowerCase();
         const headers = msg.headers || {};
-        return typeof headers[name] === "string" ? headers[name] : "";
+        const raw = headers[name];
+        if (typeof raw === "string") return raw;
+        if (Array.isArray(raw)) return raw.join(", ");
+        return "";
       }
       default:          return "";
     }
   },
 
   async _executeAction(msg, action) {
+    let result = null;
     switch (action.type) {
       case "createEvent":
-        await CalendarWriter.createEvent(msg, action);
+        result = await CalendarWriter.createEvent(msg, action);
         break;
       case "createTask":
-        await CalendarWriter.createTask(msg, action);
+        result = await CalendarWriter.createTask(msg, action);
         break;
       case "createReminder":
-        await CalendarWriter.createReminder(msg, action);
+        result = await CalendarWriter.createReminder(msg, action);
         break;
       default:
         console.warn(`[KeywordCal] Unknown action type: ${action.type}`);
     }
+    // Annotate with the action type so the popup can label outcomes.
+    return { actionType: action.type, outcome: result };
   },
 };

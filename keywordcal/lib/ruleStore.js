@@ -22,7 +22,7 @@ const RuleStore = {
     rule.createdAt = new Date().toISOString();
     rule.lastTriggered = null;
     rules.push(rule);
-    await browser.storage.local.set({ [this.STORAGE_KEY]: rules });
+    await this._write(rules);
     return rule;
   },
 
@@ -31,13 +31,26 @@ const RuleStore = {
     const idx = rules.findIndex((r) => r.id === updatedRule.id);
     if (idx !== -1) {
       rules[idx] = { ...rules[idx], ...updatedRule };
-      await browser.storage.local.set({ [this.STORAGE_KEY]: rules });
+      await this._write(rules);
     }
   },
 
   async deleteRule(ruleId) {
     const rules = (await this.getAllRules()).filter((r) => r.id !== ruleId);
+    await this._write(rules);
+  },
+
+  /**
+   * Persist + keep the toolbar badge in sync. refreshBadge() lives in
+   * background.js and is loaded before this file, so it is a global here.
+   */
+  async _write(rules) {
     await browser.storage.local.set({ [this.STORAGE_KEY]: rules });
+    try {
+      if (typeof refreshBadge === "function") await refreshBadge();
+    } catch (e) {
+      /* badge is best-effort */
+    }
   },
 
   /**
