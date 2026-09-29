@@ -123,18 +123,35 @@ class BridgeParent extends ExtensionAPI {
     return {
       BridgeParent: {
         async listCalendars() {
-          const out = svc("manager")
-            .getCalendars()
-            .map((c) => ({
-              id: c.id,
-              name: c.name || "(unnamed)",
-              type: c.type || "",
-              color:
-                (typeof c.getProperty === "function" ? c.getProperty("color") : "") || "",
-              canWrite: !c.readOnly,
-            }));
-          log(`listCalendars -> ${out.length}:`, out.map((c) => c.name).join(", "));
-          return out;
+          try {
+            log("listCalendars entering experiment API", {
+              Cc: typeof Cc,
+              Ci: typeof Ci,
+            });
+            const calendars = Array.from(svc("manager").getCalendars());
+            const out = calendars.map((calendar) => {
+              let color = "";
+              try {
+                if (typeof calendar.getProperty === "function") {
+                  color = String(calendar.getProperty("color") || "");
+                }
+              } catch (error) {
+                warn(`could not read color for calendar "${calendar.id}":`, error);
+              }
+              return {
+                id: String(calendar.id || ""),
+                name: String(calendar.name || "(unnamed)"),
+                type: String(calendar.type || ""),
+                color,
+                canWrite: !calendar.readOnly,
+              };
+            });
+            log(`listCalendars -> ${out.length}:`, out.map((calendar) => calendar.name).join(", "));
+            return out;
+          } catch (error) {
+            errlog("listCalendars failed inside experiment API:", error, error?.stack);
+            throw error;
+          }
         },
 
         async createItem(details) {

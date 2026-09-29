@@ -102,7 +102,11 @@ async function handle(message, sender) {
     const args = method === "listCalendars" ? [] : [message.item || {}];
     return await api[method](...args);
   } catch (err) {
-    warn(`${method} threw:`, err);
+    warn(`${method} threw across the experiment boundary:`, {
+      name: err?.name || "",
+      message: err?.message || String(err),
+      stack: err?.stack || "",
+    });
     return { ok: false, error: String(err) };
   }
 }
