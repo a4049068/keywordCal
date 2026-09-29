@@ -28,8 +28,8 @@ jobs:
       - name: Build extension packages
         run: |
           mkdir -p dist
-          zip -jr dist/keywordcal.xpi keywordcal
-          zip -jr dist/calendar-bridge.xpi calendar-bridge
+          (cd keywordcal && zip -qr ../dist/keywordcal.xpi .)
+          (cd calendar-bridge && zip -qr ../dist/calendar-bridge.xpi .)
           ls -l dist
 
       - name: Upload as workflow artifacts
