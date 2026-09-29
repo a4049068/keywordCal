@@ -117,7 +117,11 @@ function addActionRow(action = {}) {
   }
   fillCalendarSelect(calSelect, wantedCal);
   syncCalendarControl(block);
-  calManual.addEventListener("input", () => syncCalendarControl(block));
+  // Re-sync the dropdown whenever either control changes (fixes: typing then
+  // clearing the manual box previously left the dropdown stuck on "default").
+  const sync = () => syncCalendarControl(block);
+  calManual.addEventListener("input", sync);
+  calSelect.addEventListener("change", sync);
   block.querySelector(".action-category").value = action.category || "";
   block.querySelector(".remove-action").addEventListener("click", () => block.remove());
   elements.actionsContainer.appendChild(block);
@@ -234,6 +238,10 @@ async function saveRule(event) {
   const conditions = collectConditions().filter((c) => c.value.trim() !== "");
   const actions = collectActions();
 
+  if (!ruleDataName(elements.name.value)) {
+    alert("Give the rule a name first.");
+    return;
+  }
   if (conditions.length === 0) {
     alert("A rule needs at least one condition with a value.");
     return;
@@ -284,3 +292,5 @@ elements.restoreDefaultsBtn.addEventListener("click", async () => {
 });
 
 init();
+
+function ruleDataName(v) { return String(v || "").trim() !== ""; }

@@ -13,6 +13,7 @@ const RuleEngine = {
     const allResults = [];
 
     for (const rule of rules) {
+      if (!rule || !Array.isArray(rule.conditions) || !Array.isArray(rule.actions)) continue;
       const matchedConds = this._matchedConditions(messageContext, rule);
 
       if (matchedConds) {

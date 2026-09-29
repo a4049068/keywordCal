@@ -114,6 +114,21 @@ async function getActiveMailTab() {
   return tabs.find((t) => t && t.messageId) || null;
 }
 
+/**
+ * Resolve the currently selected message once, for both test and run.
+ */
+async function _selectedContext() {
+  const tab = await getActiveMailTab();
+  if (!tab || !tab.messageId) {
+    return { error: "Select a single email message first." };
+  }
+  try {
+    return { ctx: await buildMessageContext(tab.messageId) };
+  } catch (err) {
+    return { error: String(err) };
+  }
+}
+
 browser.runtime.onMessage.addListener(async (msg) => {
   if (!msg || typeof msg !== "object") return;
 
@@ -138,40 +153,25 @@ browser.runtime.onMessage.addListener(async (msg) => {
     }
 
     case "keywordcal:runOnSelected": {
-      // Run the rule engine on the currently selected message WITHOUT
-      // creating anything — returns which rules would match.
-      try {
-        const tab = await getActiveMailTab();
-        if (!tab || !tab.messageId) {
-          return { ok: false, error: "Select a single email message first." };
-        }
-        const ctx = await buildMessageContext(tab.messageId);
-        const rules = await RuleStore.getActiveRules();
-        const matching = rules.filter((r) => RuleEngine._matchConditions(ctx, r));
-        return {
-          ok: true,
-          subject: ctx.subject,
-          matches: matching.map((r) => ({ name: r.name, actions: r.actions.length })),
-        };
-      } catch (err) {
-        return { ok: false, error: String(err) };
-      }
+      // Dry run: which rules WOULD match the selected message (creates nothing).
+      const { ctx, error } = await _selectedContext();
+      if (error) return { ok: false, error };
+      const rules = await RuleStore.getActiveRules();
+      return {
+        ok: true,
+        subject: ctx.subject,
+        matches: rules
+          .filter((r) => RuleEngine._matchConditions(ctx, r))
+          .map((r) => ({ name: r.name, actions: r.actions.length })),
+      };
     }
 
     case "keywordcal:executeOnSelected": {
       // Actually run the engine on the selected message (creates events).
-      try {
-        const tab = await getActiveMailTab();
-        if (!tab || !tab.messageId) {
-          return { ok: false, error: "Select a single email message first." };
-        }
-        const ctx = await buildMessageContext(tab.messageId);
-        const rules = await RuleStore.getActiveRules();
-        const result = await RuleEngine.evaluate(ctx, rules);
-        return { ok: true, subject: ctx.subject, result };
-      } catch (err) {
-        return { ok: false, error: String(err) };
-      }
+      const { ctx, error } = await _selectedContext();
+      if (error) return { ok: false, error };
+      const result = await RuleEngine.evaluate(ctx, await RuleStore.getActiveRules());
+      return { ok: true, subject: ctx.subject, result };
     }
 
     case "keywordcal:listCalendars": {
