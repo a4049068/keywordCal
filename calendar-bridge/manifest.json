@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.5.1",
+  "version": "3.5.2",
   "permissions": [
     "storage"
   ],

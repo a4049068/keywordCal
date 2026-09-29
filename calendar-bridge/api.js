@@ -17,30 +17,40 @@
  * "New Event" would trigger.
  */
 
-ChromeUtils.defineESModuleGetters(this, {
-  ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
-});
+// Experiment API scripts run in a restricted sandbox where ChromeUtils and Cu
+// are NOT defined. The supported pattern (used by Thunderbird's own built-in
+// experiments) is to grab the Components globals via the global "Components"
+// object — no ChromeUtils at all.
+const { classes: Cc, interfaces: Ci, utils: Cu } = Components;
 
-// JSON schema for the privileged API surface exposed to this add-on's own
-// background script (which relays it to KeywordCal over cross-extension
-// messaging). Declared via `schema` on the API object — the supported
-// pattern since TB 115 (no separate schema.json file needed).
-const BRIDGE_SCHEMA = [
-  {
-    namespace: "BridgeParent",
-    // Required for experiment APIs in Thunderbird 140+ (Schema.jsm now
-    // refuses to register non-experimental namespaces from experiments).
-    experimental: true,
-    functions: [
-      { name: "listCalendars", type: "promise" },
-      {
-        name: "createItem",
-        type: "promise",
-        parameters: [{ name: "item", type: "object", additionalProperties: true }],
-      },
-    ],
-  },
-];
+// ExtensionParent.sys.mjs is an ES module, so it cannot be loaded with
+// Cu.import or jssubscript-loader from this sandbox. Instead we obtain the
+// ExtensionAPI base class lazily through the addon manager's principal: the
+// experiment loader evaluates this script against a scope whose global has
+// `Components` available, and we can reach the ES-module loader indirectly
+// via Services from the JSM shim.
+let _ExtensionAPI = null;
+function getBaseExtensionAPI() {
+  if (_ExtensionAPI) return _ExtensionAPI;
+  // resource://gre/modules/Services.jsm is still a JSM and importable.
+  const { Services } = Cu.import("resource://gre/modules/Services.jsm", {});
+  try {
+    // Use the mozIJSSubScriptLoader on the .sys.mjs file: these files begin
+    // with export statements which loadSubScript tolerates when evaluated
+    // into a plain object scope in TB 128 (the exports land on the scope).
+    const loader = Cc["@mozilla.org/moz/jssubscript-loader;1"]
+      .getService(Ci.mozIJSSubScriptLoader);
+    const scope = {};
+    loader.loadSubScript("resource://gre/modules/ExtensionParent.sys.mjs", scope, "utf8");
+    _ExtensionAPI = scope.ExtensionAPI || null;
+  } catch (e) {
+    _ExtensionAPI = null;
+  }
+  if (!_ExtensionAPI) {
+    throw new Error("KeywordCal Bridge: could not load ExtensionAPI (ExtensionParent.sys.mjs)");
+  }
+  return _ExtensionAPI;
+}
 
 function getRegistry() {
   return Cc["@mozilla.org/calendar/registry;1"].getService(Ci.calIRegistry);
@@ -92,12 +102,10 @@ function resolveCalendar(wanted, kind) {
   return { cal };
 }
 
-class BridgeParent extends ExtensionParent.ExtensionAPI {
+class BridgeParent extends getBaseExtensionAPI() {
   getAPI(context) {
     return {
       BridgeParent: {
-        schema: BRIDGE_SCHEMA,
-
         async listCalendars() {
           return getRegistry().getCalendars().map((cal) => ({
             id: cal.id,
