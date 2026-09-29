@@ -20,6 +20,7 @@ test("listCalendars returns only normalized data fields", async () => {
   const context = {
     Cc: { "@mozilla.org/calendar/manager;1": { getService: () => manager } },
     Ci: { calICalendarManager: {} },
+    ChromeUtils: { importESModule: () => ({ cal: { manager } }) },
     ExtensionAPI: class {},
     console: { log() {}, warn() {}, error() {} },
   };

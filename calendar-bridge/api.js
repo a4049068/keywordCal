@@ -42,6 +42,11 @@ const SERVICES = {
   tzService: ["@mozilla.org/calendar/timezone-service;1", "calITimezoneService"],
 };
 function svc(name) {
+  if (name === "manager") {
+    const { cal } = ChromeUtils.importESModule("resource:///modules/calendar/calUtils.sys.mjs");
+    if (!cal || !cal.manager) throw new Error("Thunderbird calendar manager is unavailable");
+    return cal.manager;
+  }
   const [contract, iface] = SERVICES[name];
   return Cc[contract].getService(Ci[iface]);
 }

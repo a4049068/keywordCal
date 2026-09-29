@@ -28,6 +28,7 @@ test("createItem with an existing UID is idempotent", async () => {
       "@mozilla.org/calendar/manager;1": { getService: () => manager },
     },
     Ci: { calICalendar: { ITEM_FILTER_ALL_ITEMS: 1 } },
+    ChromeUtils: { importESModule: () => ({ cal: { manager } }) },
     ExtensionAPI: class {},
     console: { log() {}, warn() {}, error() {} },
   };
