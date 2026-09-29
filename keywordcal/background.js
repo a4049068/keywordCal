@@ -106,12 +106,23 @@ browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
 // ---------- Popup / cross-page message API ----------
 
 /**
- * Find the tab holding the selected email. The toolbar popup lives in its
- * own small window, so "currentWindow" would look at the popup itself and
- * never find a messageId — query the main mail windows instead and return
- * the first tab that actually has a message selected.
+ * Resolve the currently selected message; prefer Thunderbird's mailTabs API
+ * because the popup is not itself a mail tab and may not have a messageId.
  */
-async function getActiveMailTab() {
+async function getSelectedMessageId() {
+  if (browser.mailTabs && typeof browser.mailTabs.getSelectedMessages === "function") {
+    try {
+      const selected = await browser.mailTabs.getSelectedMessages();
+      const list = Array.isArray(selected)
+        ? selected
+        : (selected && Array.isArray(selected.messages) ? selected.messages : []);
+      const first = list.find((message) => message && (message.id || message.messageId));
+      if (first) return first.id || first.messageId;
+    } catch (e) {
+      // Fall back to the tab heuristic below.
+    }
+  }
+
   let tabs = [];
   try {
     tabs = await browser.tabs.query({ active: true, currentWindow: true });
@@ -119,19 +130,20 @@ async function getActiveMailTab() {
   } catch (e) {
     tabs = await browser.tabs.query({ active: true });
   }
-  return tabs.find((t) => t && t.messageId) || null;
+  const tab = tabs.find((t) => t && t.messageId) || null;
+  return tab ? tab.messageId : null;
 }
 
 /**
  * Resolve the currently selected message once, for both test and run.
  */
 async function _selectedContext() {
-  const tab = await getActiveMailTab();
-  if (!tab || !tab.messageId) {
-    return { error: "Select a single email message first." };
+  const messageId = await getSelectedMessageId();
+  if (!messageId) {
+    return { error: "Select an email message first." };
   }
   try {
-    return { ctx: await buildMessageContext(tab.messageId) };
+    return { ctx: await buildMessageContext(messageId) };
   } catch (err) {
     return { error: String(err) };
   }
