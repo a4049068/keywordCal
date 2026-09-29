@@ -92,10 +92,17 @@ document.getElementById("test-btn").addEventListener("click", async () => {
   if (res.matches.length === 0) {
     resultEl.textContent = `No rules matched "${res.subject}".`;
   } else {
-    resultEl.innerHTML =
-      `Would match <b>${res.matches.length}</b> rule(s) on "<b>${escapeHtml(res.subject)}</b>":<ul>` +
-      res.matches.map((m) => `<li>${escapeHtml(m.name)} → ${m.actions} action(s)</li>`).join("") +
-      "</ul>";
+    const count = document.createElement("strong");
+    count.textContent = String(res.matches.length);
+    const subject = document.createElement("strong");
+    subject.textContent = res.subject;
+    const list = document.createElement("ul");
+    for (const match of res.matches) {
+      const item = document.createElement("li");
+      item.textContent = `${match.name} → ${match.actions} action(s)`;
+      list.appendChild(item);
+    }
+    resultEl.replaceChildren("Would match ", count, " rule(s) on \"", subject, "\":", list);
   }
 });
 
@@ -124,16 +131,20 @@ document.getElementById("run-btn").addEventListener("click", async () => {
     return `${kind}: done`;
   };
   resultEl.className = "ok";
-  resultEl.innerHTML =
-    firedRules
-      .map(
-        (entry) =>
-          `Rule <b>${escapeHtml(entry.ruleName)}</b> fired:<ul>` +
-          (entry.results || []).map((x) => `<li>${escapeHtml(labelOutcome(x))}</li>`).join("") +
-          "</ul>"
-      )
-      .join("") +
-    "Check your calendar or the notification.";
+  resultEl.replaceChildren();
+  for (const entry of firedRules) {
+    const ruleName = document.createElement("strong");
+    ruleName.textContent = entry.ruleName;
+    resultEl.append("Rule ", ruleName, " fired:");
+    const list = document.createElement("ul");
+    for (const outcome of entry.results || []) {
+      const item = document.createElement("li");
+      item.textContent = labelOutcome(outcome);
+      list.appendChild(item);
+    }
+    resultEl.appendChild(list);
+  }
+  resultEl.append("Check your calendar or the notification.");
   loadStatus();
 });
 
@@ -215,12 +226,6 @@ function renderPendingDates(entries) {
     row.append(title, subject, reason, source, dateInput, actions);
     pendingList.appendChild(row);
   }
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  })[c]);
 }
 
 browser.storage?.local?.onChanged?.addListener((changes, areaName) => {

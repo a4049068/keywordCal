@@ -6,7 +6,7 @@
   "default_locale": "en",
   "author": "Your Name",
   "homepage_url": "https://example.com/keywordcal",
-  "applications": {
+  "browser_specific_settings": {
     "gecko": {
       "id": "keywordcal@yourdomain.com",
       "strict_min_version": "128.0"
