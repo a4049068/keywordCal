@@ -7,34 +7,45 @@
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 
-async function loadStatus() {
+// Every sendMessage here must be wrapped: if the background script is
+// momentarily unavailable (add-on just updated/reloaded), a raw await would
+// throw and leave the button silently stuck on "Testing…"/"Running…".
+async function send(msg) {
   try {
-    const s = await browser.runtime.sendMessage({ type: "keywordcal:getStatus" });
-    const lines = [`${s.activeRules}/${s.totalRules} rule(s) active`];
-    if (s.lastTriggered) {
-      lines.push(`Last trigger: ${new Date(s.lastTriggered).toLocaleString()}`);
-    }
-    if (!s.bridgeInstalled) {
-      lines.push(
-        "⚠ Calendar Bridge not detected — items will open as .ics compose drafts. " +
-        "Install keywordcal-bridge for silent direct calendar writes."
-      );
-      statusEl.classList.add("warn");
-    } else {
-      const names = (s.calendars || []).map((c) => c.name).join(", ");
-      if (names) lines.push(`Calendars reachable: ${names}`);
-    }
-    statusEl.textContent = lines.join("\n");
-    statusEl.style.whiteSpace = "pre-wrap";
+    return await browser.runtime.sendMessage(msg);
   } catch (err) {
-    statusEl.textContent = "Background unavailable: " + err;
-    statusEl.classList.add("warn");
+    return { ok: false, error: `Background unavailable: ${err}` };
   }
+}
+
+async function loadStatus() {
+  const s = await send({ type: "keywordcal:getStatus" });
+  if (!s || typeof s.activeRules !== "number") {
+    statusEl.textContent = (s && s.error) || "Background unavailable.";
+    statusEl.classList.add("warn");
+    return;
+  }
+  const lines = [`${s.activeRules}/${s.totalRules} rule(s) active`];
+  if (s.lastTriggered) {
+    lines.push(`Last trigger: ${new Date(s.lastTriggered).toLocaleString()}`);
+  }
+  if (!s.bridgeInstalled) {
+    lines.push(
+      "⚠ Calendar Bridge not detected — items will open as .ics compose drafts. " +
+      "Install keywordcal-bridge for silent direct calendar writes."
+    );
+    statusEl.classList.add("warn");
+  } else {
+    const names = (s.calendars || []).map((c) => c.name).join(", ");
+    if (names) lines.push(`Calendars reachable: ${names}`);
+  }
+  statusEl.textContent = lines.join("\n");
+  statusEl.style.whiteSpace = "pre-wrap";
 }
 
 document.getElementById("test-btn").addEventListener("click", async () => {
   resultEl.textContent = "Testing…";
-  const res = await browser.runtime.sendMessage({ type: "keywordcal:runOnSelected" });
+  const res = await send({ type: "keywordcal:runOnSelected" });
   if (!res || !res.ok) {
     resultEl.className = "err";
     resultEl.textContent = (res && res.error) || "No response from background.";
@@ -53,7 +64,7 @@ document.getElementById("test-btn").addEventListener("click", async () => {
 
 document.getElementById("run-btn").addEventListener("click", async () => {
   resultEl.textContent = "Running…";
-  const res = await browser.runtime.sendMessage({ type: "keywordcal:executeOnSelected" });
+  const res = await send({ type: "keywordcal:executeOnSelected" });
   if (!res || !res.ok) {
     resultEl.className = "err";
     resultEl.textContent = (res && res.error) || "No response from background.";

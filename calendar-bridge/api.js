@@ -28,6 +28,9 @@ ChromeUtils.defineESModuleGetters(this, {
 const BRIDGE_SCHEMA = [
   {
     namespace: "BridgeParent",
+    // Required for experiment APIs in Thunderbird 140+ (Schema.jsm now
+    // refuses to register non-experimental namespaces from experiments).
+    experimental: true,
     functions: [
       { name: "listCalendars", type: "promise" },
       {
