@@ -2,33 +2,20 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* global ExtensionAPI, Services, Cc, Ci, cal */
 /**
  * KeywordCal Calendar Bridge - privileged experiment API (parent process).
  *
  *   - listCalendars() -> [{ id, name, type, color, canWrite }]
  *   - createItem({ calendarId, kind, ... }) -> { ok, id } | { ok:false, error }
  *
- * All calendar work happens locally via Thunderbird's calendar manager; no
- * network I/O is performed here. The base ExtensionAPI class is provided by
- * the mixin declared in manifest.json ("addon_parent:parentAPI.ExtensionAPI"),
- * so this sandboxed script needs no ChromeUtils/Cu/Components imports at all.
+ * Globals (ExtensionAPI, Services, Cc, Ci) come from the api "scopes"
+ * declared in manifest.json; the `cal` module namespace comes from the
+ * scopedAddonLoader for the "caldavjs" loader — exactly how Thunderbird's
+ * own built-in calendar experiments get access. No ChromeUtils/Cu/
+ * Components usage anywhere (those are unavailable/deprecated in this
+ * sandbox and caused the shipped load errors).
  */
-
-// Experiment API scripts run in a restricted sandbox without ChromeUtils/Cu.
-// The documented pattern (used by Thunderbird's own built-in experiments) is
-// to destructure Cc/Ci from the global Components object; ExtensionAPI itself
-// comes from the mixin declared in manifest.json options.
-const { classes: Cc, interfaces: Ci } = Components;
-
-let _cal = null; // lazy calICSocalICal ES-module namespace
-
-async function getCal() {
-  if (!_cal) {
-    const mod = await import("resource:///modules/calendar/utils/calICSocalICal.sys.mjs");
-    _cal = mod.cal;
-  }
-  return _cal;
-}
 
 function getRegistry() {
   return Cc["@mozilla.org/calendar/registry;1"].getService(Ci.calIRegistry);
@@ -48,35 +35,33 @@ function resolveCalendar(wanted, kind) {
   if (!wanted || wanted === "default") {
     let def = null;
     try {
-      const mgr = Cc["@mozilla.org/calendar/manager;1"].getService(
-        Ci.calICalendarManager
-      );
+      // Services.clm is the calICalendarManager in TB 115+ (no XPCOM lookup).
       def =
         kind === "task"
-          ? mgr.getDefaultTaskCalendar?.()
-          : mgr.getDefaultCalendar?.();
+          ? Services.clm.getDefaultTaskCalendar?.()
+          : Services.clm.getDefaultCalendar?.();
     } catch (e) {
       /* older/newer manager shape - fall through to heuristics */
     }
-    const cal =
+    const found =
       (def && calendars.find((c) => c.id === def.id)) ||
       calendars.find((c) => c.type === "local" && c.canModifyItems !== false) ||
       calendars.find((c) => c.canModifyItems !== false) ||
       calendars[0];
-    return { cal };
+    return { cal: found };
   }
 
-  const cal =
+  const found =
     calendars.find((c) => c.id === wanted) ||
     calendars.find((c) => (c.name || "") === wanted) ||
     calendars.find((c) => (c.name || "").toLowerCase().includes(wanted.toLowerCase()));
-  if (!cal) {
+  if (!found) {
     return {
       error: `calendar "${wanted}" not found`,
       available: calendars.map((c) => ({ id: c.id, name: c.name })),
     };
   }
-  return { cal };
+  return { cal: found };
 }
 
 class BridgeParent extends ExtensionAPI {
@@ -84,27 +69,26 @@ class BridgeParent extends ExtensionAPI {
     return {
       BridgeParent: {
         async listCalendars() {
-          return getRegistry().getCalendars().map((cal) => ({
-            id: cal.id,
-            name: cal.name || "(unnamed)",
-            type: cal.type || "",
-            color: cal.getProperty("color") || "",
-            canWrite: cal.canModifyItems !== false,
+          return getRegistry().getCalendars().map((c) => ({
+            id: c.id,
+            name: c.name || "(unnamed)",
+            type: c.type || "",
+            color: (typeof c.getProperty === "function" ? c.getProperty("color") : "") || "",
+            canWrite: c.canModifyItems !== false,
           }));
         },
 
         async createItem(details) {
           try {
             const isTask = details.kind === "task";
-            const { cal, error } = resolveCalendar(
+            const { cal: target, error } = resolveCalendar(
               details.calendarId,
               isTask ? "task" : "event"
             );
             if (error) return { ok: false, error };
 
-            const calNamespace = await getCal();
-            const item = isTask ? calNamespace.createTask() : calNamespace.createEvent();
-            item.calendar = cal.superCalendar;
+            const item = isTask ? cal.createTask() : cal.createEvent();
+            item.calendar = target.superCalendar;
 
             item.title = details.title || "KeywordCal item";
             if (details.description) item.description = details.description;
@@ -114,13 +98,15 @@ class BridgeParent extends ExtensionAPI {
             const tzService = Cc["@mozilla.org/calendar/timezone-service;1"]
               .getService(Ci.calITimezoneService);
             const localTz =
-              tzService.getTimezone(cal.defaultTimezone?.name || "floating") ||
+              tzService.getTimezone(target.defaultTimezone?.name || "floating") ||
               tzService.getTimezone("floating");
 
             const makeDt = (iso) => {
               const d = new Date(iso);
-              const dt = calNamespace.DateTime.fromJavaScriptDate(d, localTz);
-              return dt;
+              if (isNaN(d.getTime())) {
+                throw new Error(`invalid date value: ${iso}`);
+              }
+              return cal.DateTime.fromJavaScriptDate(d, localTz);
             };
 
             if (isTask) {
@@ -143,7 +129,7 @@ class BridgeParent extends ExtensionAPI {
             return {
               ok: true,
               id: item.hashId || item.id || "(assigned)",
-              calendarName: cal.name,
+              calendarName: target.name,
             };
           } catch (err) {
             return { ok: false, error: String(err) };

@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "KeywordCal Calendar Bridge",
-  "version": "3.5.3",
+  "version": "3.5.4",
   "permissions": [
     "storage"
   ],
@@ -45,7 +45,11 @@
         "schema": {},
         "parent": {
           "scopes": [
-            "addon_parent"
+            "main",
+            "addon_parent",
+            "parseCmxHeaderResponseJSON",
+            "addcaldav",
+            "caldavjs"
           ],
           "paths": [
             [
@@ -55,10 +59,14 @@
           "script": "api.js"
         },
         "options": {
-          "context_in_parent": true,
-          "addon_parent:parentAPI.ExtensionAPI": []
+          "context_in_parent": true
         }
       }
+    ]
+  },
+  "background": {
+    "scripts": [
+      "background.js"
     ]
   }
 }

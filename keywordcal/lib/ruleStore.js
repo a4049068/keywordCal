@@ -7,8 +7,11 @@ const RuleStore = {
   STORAGE_KEY: "keywordcal_rules",
 
   async getAllRules() {
-    const data = await browser.storage.local.get(this.STORAGE_KEY);
-    return data[this.STORAGE_KEY] || [];
+    // storage.local.get(key) returns an object keyed by the requested key;
+    // get() with no argument returns the whole store. Accept both shapes so a
+    // missing/renamed key can never throw "cannot read property of undefined".
+    const data = (await browser.storage.local.get(this.STORAGE_KEY)) || {};
+    return Array.isArray(data) ? data : data[this.STORAGE_KEY] || [];
   },
 
   async getActiveRules() {
