@@ -116,7 +116,7 @@ function resolveCalendar(wanted, kind) {
 
 // ---------- Experiment API implementation ----------
 
-class BridgeParent extends ExtensionAPI {
+this.BridgeParent = class extends ExtensionAPI {
   getAPI(context) {
     log("BridgeParent API instantiated");
 
@@ -313,4 +313,4 @@ class BridgeParent extends ExtensionAPI {
       },
     };
   }
-}
+};

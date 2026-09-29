@@ -31,7 +31,7 @@ test("createItem with an existing UID is idempotent", async () => {
     ExtensionAPI: class {},
     console: { log() {}, warn() {}, error() {} },
   };
-  vm.runInNewContext(`${source}\nglobalThis.api = new BridgeParent().getAPI({}).BridgeParent;`, context);
+  vm.runInNewContext(`${source}\nglobalThis.api = new globalThis.BridgeParent().getAPI({}).BridgeParent;`, context);
 
   const result = await context.api.createItem({
     kind: "event",

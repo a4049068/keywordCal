@@ -23,7 +23,7 @@ test("listCalendars returns only normalized data fields", async () => {
     ExtensionAPI: class {},
     console: { log() {}, warn() {}, error() {} },
   };
-  vm.runInNewContext(`${source}\nglobalThis.api = new BridgeParent().getAPI({}).BridgeParent;`, context);
+  vm.runInNewContext(`${source}\nglobalThis.api = new globalThis.BridgeParent().getAPI({}).BridgeParent;`, context);
 
   const result = await context.api.listCalendars();
   assert.equal(result.length, 1);
