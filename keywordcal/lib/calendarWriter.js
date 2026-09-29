@@ -60,38 +60,45 @@ const CalendarWriter = {
       } catch (e) {
         console.warn("[KeywordCal] bridge storage lookup failed:", e);
       }
-      if (typeof storedId !== "string" || !storedId.includes("@")) {
+
+      const candidates = [storedId, "keywordcal-bridge@yourdomain.com"].filter(
+        (value, index, all) => typeof value === "string" && value.includes("@") && all.indexOf(value) === index
+      );
+
+      if (candidates.length === 0) {
         console.log("[KeywordCal] Calendar Bridge not registered in shared storage — " +
           "is keywordcal-bridge installed AND enabled? Will fall back to .ics drafts.");
         return null;
       }
 
-      // Probe both channels; cache whichever answers.
-      for (const [label, probe] of [
-        ["targeted", () => browser.runtime.sendMessage(storedId, { keywordcal: "registry" })],
-        ["broadcast", () => browser.runtime.sendMessage({ keywordcal: "registry" })],
-      ]) {
-        try {
-          const reply = await probe();
-          if (reply && typeof reply.extensionId === "string" &&
-              Array.isArray(reply.methods) && reply.methods.some((m) => BRIDGE_METHODS.includes(m))) {
-            this._bridgeId = reply.extensionId;
-            console.log(`[KeywordCal] Calendar Bridge found (${label}): ${this._bridgeId}`);
-            return this._bridgeId;
+      for (const candidate of candidates) {
+        for (const [label, probe] of [
+          ["targeted", () => browser.runtime.sendMessage(candidate, { keywordcal: "registry" })],
+          ["broadcast", () => browser.runtime.sendMessage({ keywordcal: "registry" })],
+        ]) {
+          try {
+            const reply = await probe();
+            if (reply && typeof reply.extensionId === "string" &&
+                Array.isArray(reply.methods) && reply.methods.some((m) => BRIDGE_METHODS.includes(m))) {
+              this._bridgeId = reply.extensionId;
+              if (candidate !== reply.extensionId) {
+                await browser.storage.local.set({ [BRIDGE_STORAGE_KEY]: reply.extensionId });
+              }
+              console.log(`[KeywordCal] Calendar Bridge found (${label}): ${this._bridgeId}`);
+              return this._bridgeId;
+            }
+            console.warn(`[KeywordCal] Bridge probe (${label}) got unexpected reply:`, reply);
+          } catch (err) {
+            console.log(`[KeywordCal] Bridge probe (${label}) failed: ${err} ` +
+              "(expected if cross-extension messaging is blocked)");
           }
-          console.warn(`[KeywordCal] Bridge probe (${label}) got unexpected reply:`, reply);
-        } catch (err) {
-          console.log(`[KeywordCal] Bridge probe (${label}) failed: ${err} ` +
-            "(expected if cross-extension messaging is blocked)");
         }
       }
 
-      // Registered but silent: keep the stored id — direct calls either work
-      // (same-origin installs) or surface their own errors later.
-      console.warn(`[KeywordCal] Bridge "${storedId}" registered but unresponsive — ` +
-        "using stored id for direct calls; will fall back to .ics if they fail.");
-      this._bridgeId = storedId;
-      return storedId;
+      const fallbackId = candidates[0];
+      console.warn(`[KeywordCal] Bridge "${fallbackId}" not responding — using direct-call fallback; .ics drafts may be opened instead.`);
+      this._bridgeId = fallbackId;
+      return fallbackId;
     })().finally(() => { this._discoveryPromise = null; });
 
     return this._discoveryPromise;

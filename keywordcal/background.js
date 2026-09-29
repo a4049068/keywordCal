@@ -80,12 +80,16 @@ browser.storage.local.onChanged.addListener((changes) => {
 // ---------- New-mail listener ----------
 
 browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
-  console.log(`[KeywordCal] New mail in ${folder.name}: ${messages.length} message(s)`);
+  const incoming = Array.isArray(messages) ? messages : (messages ? [messages] : []);
+  console.log(`[KeywordCal] New mail in ${folder && folder.name ? folder.name : "unknown"}: ${incoming.length} message(s)`);
+
+  if (incoming.length === 0) return;
 
   const rules = await RuleStore.getActiveRules();
   if (rules.length === 0) return;
 
-  for (const message of messages) {
+  for (const message of incoming) {
+      if (!message || !message.id) continue;
       if (CalendarWriter.shouldSkipDuplicate(message.id)) {
         console.log(`[KeywordCal] Skipping duplicate delivery of message ${message.id} (within ${CalendarWriter.DEDUPE_WINDOW_MS / 1000}s window)`);
         continue;
