@@ -32,21 +32,30 @@ function warn(...args) { console.warn(LOG_PREFIX, ...args); }
 
 // ---------- 1. Shared-storage registration ----------
 
-async function register() {
+// The "storage" permission must be granted before browser.storage.local
+// exists; on temporary installs it can lag behind the background script's
+// first lines, so retry with backoff instead of giving up once.
+const RETRY_DELAYS_MS = [250, 1000, 3000, 8000, 20000];
+
+async function register(attempt = 0) {
   try {
-    if (!browser.storage || !browser.storage.local) {
-      warn("storage unavailable — KeywordCal will fall back to .ics drafts");
-      return;
-    }
+    if (!browser.storage || !browser.storage.local) throw new Error("api missing");
     await browser.storage.local.set({ [BRIDGE_STORAGE_KEY]: BRIDGE_ID });
-    log(`registered as "${BRIDGE_ID}" in shared storage`);
+    log(`registered as "${BRIDGE_ID}" in shared storage (attempt ${attempt + 1})`);
+    return true;
   } catch (e) {
-    warn("registration failed:", e);
+    if (attempt < RETRY_DELAYS_MS.length) {
+      log(`storage not ready (attempt ${attempt + 1}: ${e.message}) — retrying in ${RETRY_DELAYS_MS[attempt]}ms`);
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      return register(attempt + 1);
+    }
+    warn("storage permanently unavailable after retries — direct-message discovery still active; KeywordCal may fall back to .ics drafts");
+    return false;
   }
 }
 
 register();
-browser.runtime.onStartup.addListener(register);
+browser.runtime.onStartup.addListener(() => register());
 browser.runtime.onInstalled.addListener((info) => {
   log("onInstalled:", JSON.stringify(info));
   register();
