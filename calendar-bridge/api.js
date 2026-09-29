@@ -38,7 +38,6 @@ function errlog(...args) {
 // ---------- XPCOM helpers ----------
 
 const SERVICES = {
-  registry: ["@mozilla.org/calendar/registry;1", "calIRegistry"],
   manager: ["@mozilla.org/calendar/manager;1", "calICalendarManager"],
   tzService: ["@mozilla.org/calendar/timezone-service;1", "calITimezoneService"],
 };
@@ -60,7 +59,7 @@ function makeDateTime(iso, tz) {
   const dt = Cc["@mozilla.org/calendar/datetime;1"].createInstance(Ci.calIDateTime);
   dt.timezone = tz || svc("tzService").getTimezone("floating");
   dt.year = dateValue.getFullYear();
-  dt.month = dateValue.getMonth() + 1; // calIDateTime months are 1-based
+  dt.month = dateValue.getMonth();
   dt.day = dateValue.getDate();
   dt.hour = dateValue.getHours();
   dt.minute = dateValue.getMinutes();
@@ -74,7 +73,7 @@ function makeDateTime(iso, tz) {
  * to the first writable local calendar. Returns { cal } or { error }.
  */
 function resolveCalendar(wanted, kind) {
-  const calendars = svc("registry").getCalendars();
+  const calendars = svc("manager").getCalendars();
   log(
     `resolveCalendar("${wanted}", ${kind}): ${calendars.length} calendar(s):`,
     calendars.map((c) => `${c.name}[${c.id}]`).join(", ")
@@ -93,8 +92,8 @@ function resolveCalendar(wanted, kind) {
     }
     const found =
       (def && calendars.find((c) => c.id === def.id)) ||
-      calendars.find((c) => c.type === "local" && c.canModifyItems !== false) ||
-      calendars.find((c) => c.canModifyItems !== false) ||
+      calendars.find((c) => c.type === "local" && !c.readOnly) ||
+      calendars.find((c) => !c.readOnly) ||
       calendars[0];
     log(`resolved default -> "${found.name}" (${found.id})`);
     return { cal: found };
@@ -124,7 +123,7 @@ class BridgeParent extends ExtensionAPI {
     return {
       BridgeParent: {
         async listCalendars() {
-          const out = svc("registry")
+          const out = svc("manager")
             .getCalendars()
             .map((c) => ({
               id: c.id,
@@ -132,7 +131,7 @@ class BridgeParent extends ExtensionAPI {
               type: c.type || "",
               color:
                 (typeof c.getProperty === "function" ? c.getProperty("color") : "") || "",
-              canWrite: c.canModifyItems !== false,
+              canWrite: !c.readOnly,
             }));
           log(`listCalendars -> ${out.length}:`, out.map((c) => c.name).join(", "));
           return out;
@@ -150,7 +149,7 @@ class BridgeParent extends ExtensionAPI {
               warn("createItem refused:", error);
               return { ok: false, error };
             }
-            if (target.canModifyItems === false) {
+            if (target.readOnly) {
               return { ok: false, error: `calendar "${target.name}" is read-only` };
             }
 
@@ -179,25 +178,25 @@ class BridgeParent extends ExtensionAPI {
               if (details.dueDate) item.dueDate = makeDateTime(details.dueDate, tz);
               item.isCompleted = false;
             } else {
-              item.startTime = makeDateTime(details.startDate, tz);
-              item.endTime = makeDateTime(details.endDate, tz);
+              item.startDate = makeDateTime(details.startDate, tz);
+              item.endDate = makeDateTime(details.endDate, tz);
             }
 
             for (const mins of details.alarms || []) {
-              const alarm = item.makeAlarm(
-                Ci.calIAlarm.ACTION_DISPLAY,
-                `-${Math.abs(mins)} minutes`
-              );
+              const alarm = Cc["@mozilla.org/calendar/alarm;1"].createInstance(Ci.calIAlarm);
+              const offset = Cc["@mozilla.org/calendar/duration;1"].createInstance(Ci.calIDuration);
+              offset.inSeconds = -Math.abs(Number(mins)) * 60;
+              alarm.action = "DISPLAY";
+              alarm.related = isTask ? Ci.calIAlarm.ALARM_RELATED_END : Ci.calIAlarm.ALARM_RELATED_START;
+              alarm.offset = offset;
+              alarm.description = item.title;
               item.addAlarm(alarm);
             }
 
-            await item.addItem({});
-            // hashId is a stable numeric id derived from the UID — unique per
-            // item. item.id is empty until the backend assigns one (often
-            // async for CalDAV), so prefer hashId for reliable undo.
+            const savedItem = await target.addItem(item);
             const result = {
               ok: true,
-              id: String(item.hashId ?? item.id ?? ""),
+              id: String(savedItem.hashId || savedItem.id || ""),
               calendarName: target.name,
             };
             log("createItem succeeded:", JSON.stringify(result));
@@ -216,18 +215,18 @@ class BridgeParent extends ExtensionAPI {
             const start = new Date(details.start);
             const end = new Date(details.end);
             if (isNaN(start.getTime()) || isNaN(end.getTime())) return [];
-            const items = await target.getItems(null, null);
+            const items = await target.getItemsAsArray(Ci.calICalendar.ITEM_FILTER_ALL_ITEMS, 0, null, null);
             const out = Array.from(items)
-              .filter((i) => i.startTime && i.endTime)
+              .filter((i) => i.startDate && i.endDate)
               .filter((i) => {
                 // Compare as UTC so DST shifts can't skew the overlap test.
-                const ms = (dt) => Date.UTC(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second);
-                return ms(i.startTime.getAsUTC(0)) < end.getTime() && ms(i.endTime.getAsUTC(0)) > start.getTime();
+                const ms = (dt) => dt.nativeTime / 1000;
+                return ms(i.startDate) < end.getTime() && ms(i.endDate) > start.getTime();
               })
               .map((i) => ({
                 title: i.title || "(untitled)",
-                startDate: i.startTime?.toString?.() || "",
-                endDate: i.endTime?.toString?.() || "",
+                startDate: i.startDate?.toString?.() || "",
+                endDate: i.endDate?.toString?.() || "",
               }));
             log(`findConflicts -> ${out.length} overlapping event(s)`);
             return out;
@@ -252,7 +251,7 @@ class BridgeParent extends ExtensionAPI {
               return { ok: false, error };
             }
 
-            const items = await target.getItems(null, null);
+            const items = await target.getItemsAsArray(Ci.calICalendar.ITEM_FILTER_ALL_ITEMS, 0, null, null);
             // Match by numeric hashId first (what createItem returned), then
             // fall back to UID / backend id so hand-edited items still match.
             const hit = Array.from(items).find(
@@ -264,7 +263,7 @@ class BridgeParent extends ExtensionAPI {
             if (!hit) {
               return { ok: false, error: `item "${wanted}" not found in "${target.name}"` };
             }
-            await hit.deleteItem();
+            await target.deleteItem(hit);
             log(`deleteItem removed "${hit.title}" from "${target.name}"`);
             return { ok: true, title: hit.title, calendarName: target.name };
           } catch (err) {
