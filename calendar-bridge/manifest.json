@@ -22,7 +22,6 @@
       "schema": "schema.json",
       "parent": {
         "scopes": [
-          "main",
           "addon_parent"
         ],
         "paths": [
