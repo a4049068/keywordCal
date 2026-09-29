@@ -37,18 +37,14 @@ function errlog(...args) {
 
 // ---------- XPCOM helpers ----------
 
-function getRegistry() {
-  return Cc["@mozilla.org/calendar/registry;1"].getService(Ci.calIRegistry);
-}
-
-function getCalendarManager() {
-  return Cc["@mozilla.org/calendar/manager;1"].getService(Ci.calICalendarManager);
-}
-
-function getTimezoneService() {
-  return Cc["@mozilla.org/calendar/timezone-service;1"].getService(
-    Ci.calITimezoneService
-  );
+const SERVICES = {
+  registry: ["@mozilla.org/calendar/registry;1", "calIRegistry"],
+  manager: ["@mozilla.org/calendar/manager;1", "calICalendarManager"],
+  tzService: ["@mozilla.org/calendar/timezone-service;1", "calITimezoneService"],
+};
+function svc(name) {
+  const [contract, iface] = SERVICES[name];
+  return Cc[contract].getService(Ci[iface]);
 }
 
 /**
@@ -62,7 +58,7 @@ function makeDateTime(iso, tz) {
     throw new Error(`invalid date value: ${iso}`);
   }
   const dt = Cc["@mozilla.org/calendar/datetime;1"].createInstance(Ci.calIDateTime);
-  dt.timezone = tz || getTimezoneService().getTimezone("floating");
+  dt.timezone = tz || svc("tzService").getTimezone("floating");
   dt.year = dateValue.getFullYear();
   dt.month = dateValue.getMonth() + 1; // calIDateTime months are 1-based
   dt.day = dateValue.getDate();
@@ -78,7 +74,7 @@ function makeDateTime(iso, tz) {
  * to the first writable local calendar. Returns { cal } or { error }.
  */
 function resolveCalendar(wanted, kind) {
-  const calendars = getRegistry().getCalendars();
+  const calendars = svc("registry").getCalendars();
   log(
     `resolveCalendar("${wanted}", ${kind}): ${calendars.length} calendar(s):`,
     calendars.map((c) => `${c.name}[${c.id}]`).join(", ")
@@ -90,7 +86,7 @@ function resolveCalendar(wanted, kind) {
   if (!wanted || wanted === "default") {
     let def = null;
     try {
-      const mgr = getCalendarManager();
+      const mgr = svc("manager");
       def = kind === "task" ? mgr.getDefaultTaskCalendar?.() : mgr.getDefaultCalendar?.();
     } catch (e) {
       warn("could not query default calendar:", e);
@@ -128,7 +124,7 @@ class BridgeParent extends ExtensionAPI {
     return {
       BridgeParent: {
         async listCalendars() {
-          const out = getRegistry()
+          const out = svc("registry")
             .getCalendars()
             .map((c) => ({
               id: c.id,
@@ -174,7 +170,7 @@ class BridgeParent extends ExtensionAPI {
             let tz = null;
             try {
               const tzName = target.defaultTimezone?.name || "floating";
-              tz = getTimezoneService().getTimezone(tzName);
+              tz = svc("tzService").getTimezone(tzName);
             } catch (e) {
               warn("timezone lookup failed, using floating:", e);
             }
@@ -224,10 +220,9 @@ class BridgeParent extends ExtensionAPI {
             const out = Array.from(items)
               .filter((i) => i.startTime && i.endTime)
               .filter((i) => {
-                const s = i.startTime.QueryInterface(Ci.calIDateTime).getAsUTC(0);
-                const e = i.endTime.getAsUTC(0);
-                const js = (dt) => new Date(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second).getTime();
-                return js(s) < end.getTime() && js(e) > start.getTime();
+                // Compare as UTC so DST shifts can't skew the overlap test.
+                const ms = (dt) => Date.UTC(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second);
+                return ms(i.startTime.getAsUTC(0)) < end.getTime() && ms(i.endTime.getAsUTC(0)) > start.getTime();
               })
               .map((i) => ({
                 title: i.title || "(untitled)",

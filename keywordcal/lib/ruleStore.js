@@ -21,9 +21,11 @@ const RuleStore = {
 
   async addRule(rule) {
     const rules = await this.getAllRules();
-    rule.id = `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    rule.createdAt = new Date().toISOString();
-    rule.lastTriggered = null;
+    Object.assign(rule, {
+      id: `rule_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: new Date().toISOString(),
+      lastTriggered: null,
+    });
     rules.push(rule);
     await this._write(rules);
     return rule;

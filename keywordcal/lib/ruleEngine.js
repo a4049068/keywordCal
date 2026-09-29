@@ -62,10 +62,6 @@ const RuleEngine = {
     return passed.length > 0 ? passed : null;
   },
 
-  _matchConditions(msg, rule) {
-    return this._matchedConditions(msg, rule) !== null;
-  },
-
   _evaluateCondition(msg, cond) {
     const fieldValue = this._getFieldValue(msg, cond);
     // A missing/empty field simply fails every operator except notContains

@@ -165,8 +165,13 @@ browser.runtime.onMessage.addListener(async (msg) => {
         ok: true,
         subject: ctx.subject,
         matches: rules
-          .filter((r) => RuleEngine._matchConditions(ctx, r))
-          .map((r) => ({ name: r.name, actions: r.actions.length })),
+          .map((r) => ({ rule: r, passed: RuleEngine._matchedConditions(ctx, r) }))
+          .filter(({ passed }) => passed)
+          .map(({ rule, passed }) => ({
+            name: rule.name,
+            actions: rule.actions.length,
+            why: passed.map((c) => `${c.field} ${c.operator} "${c.value}"`).join(rule.matchType === "all" ? " AND " : " OR "),
+          })),
       };
     }
 

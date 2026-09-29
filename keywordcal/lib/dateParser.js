@@ -3,17 +3,17 @@
  */
 "use strict";
 
+const WEEKDAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+
 /**
  * Interpret a numeric m/d/y token. JS `new Date("10/15")` silently returns
- * *today's year*, which would file events in the past — so we add one guard:
- * if no year was present and the resulting date is already behind us, assume
- * the user meant next year.
+ * *today's year*, which would file events in the past — so if no year was
+ * present and the result is already behind us, assume next year.
  */
 function parseNumeric(token) {
-  const withYear = /\d{4}/.test(token);
-  let d = new Date(token);
+  const d = new Date(token);
   if (isNaN(d.getTime())) return null;
-  if (!withYear) {
+  if (!/\d{4}/.test(token)) {
     const now = new Date();
     now.setHours(0, 0, 0, 0);
     if (d < now) d.setFullYear(d.getFullYear() + 1);
@@ -22,98 +22,70 @@ function parseNumeric(token) {
 }
 
 const DateParser = {
-  /**
-   * Extract the first date matching the given regex pattern.
-   */
+  /** First date matching `pattern` (falls back to heuristics when absent). */
   extract(text, pattern) {
     if (!text) return null;
     if (!pattern) return this._heuristicExtract(text);
 
     try {
-      const re = new RegExp(pattern, "i");
-      const match = text.match(re);
+      const match = text.match(new RegExp(pattern, "i"));
       if (match) {
-        // Prefer the first capturing group (e.g. "(\d{1,2}[/-]\d{1,2})") over
-        // the full match, which may carry surrounding words like "Deadline ".
+        // Prefer capture group 1 ("(\d+/\d+)") over the full match, which may
+        // carry surrounding words like "Deadline ".
         const token = (match[1] || match[0]).trim();
-        if (/tomorrow/i.test(token)) {
-          const d = new Date();
-          d.setDate(d.getDate() + 1);
-          d.setHours(9, 0, 0, 0);
-          return d;
-        }
-        const rel = this._relative(token);
-        if (rel) return rel;
-        const parsed = parseNumeric(token);
-        if (parsed) return parsed;
-        console.warn(`[KeywordCal] Date pattern matched "${token}" but it is not a parseable date.`);
+        return this._fromToken(token) ||
+          console.warn(`[KeywordCal] Date pattern matched "${token}" but it is not a parseable date.`) ||
+          this._heuristicExtract(text);
       }
     } catch {
       console.warn(`[KeywordCal] Invalid date pattern: ${pattern}`);
     }
-    return this._heuristicExtract(text); // pattern didn't yield a date -> heuristics
+    return this._heuristicExtract(text);
   },
 
-  /**
-   * Fallback heuristic: look for common date formats.
-   */
+  /** Parse one natural-language date token; null when unparseable. */
+  _fromToken(token) {
+    if (/\btomorrow\b/i.test(token)) return this._at9am(1);
+    const rel = /\b(this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(token);
+    if (rel) return this._weekdayOf(rel[2], /\bnext\b/i.test(token) ? "next" : "this");
+    return parseNumeric(token);
+  },
+
+  /** Scan for common formats, most explicit first. */
   _heuristicExtract(text) {
     const patterns = [
-      /\b\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\b/,             // YYYY-MM-DD
-      /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/,           // M/D/YYYY
+      /\b\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\b/,                          // YYYY-MM-DD
+      /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/,                        // M/D/YYYY
       /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b/i,
       /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/i,
       /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?(?:,?\s+\d{4})?\b/i,
-      /\b(?:this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+      /\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
       /\btomorrow\b/i,
     ];
-
     for (const p of patterns) {
       const match = text.match(p);
       if (!match) continue;
-      if (/tomorrow/i.test(match[0])) {
-        const d = new Date();
-        d.setDate(d.getDate() + 1);
-        d.setHours(9, 0, 0, 0);
-        return d;
-      }
-      if (/(this|next)\s+/i.test(match[0])) {
-        const rel = this._weekdayOf(match[0], /next/i.test(match[0]) ? "next" : "this");
-        if (rel) return rel;
-        continue;
-      }
-      const parsed = parseNumeric(match[0]);
+      const parsed = this._fromToken(match[0]);
       if (parsed) return parsed;
     }
     return null;
   },
 
-  _relative(token) {
-    if (/\btomorrow\b/i.test(token)) {
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      d.setHours(9, 0, 0, 0);
-      return d;
-    }
-    if (/\b(this|next)\s+/.test(token)) {
-      return this._weekdayOf(token, /\bnext\b/i.test(token) ? "next" : "this");
-    }
-    return null;
-  },
-
-  _weekdayOf(text, mode) {
-    const days = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
-    const lower = text.toLowerCase();
-    const target = days.findIndex((d) => lower.includes(d));
-    if (target === -1) return null;
-
-    const now = new Date();
-    let diff = (target - now.getDay() + 7) % 7;
-    if (mode === "next" && diff === 0) diff = 7;
-    const d = new Date(now);
-    d.setDate(d.getDate() + diff);
+  /** Tomorrow (or +N days) at 09:00 local. */
+  _at9am(daysAhead) {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
     d.setHours(9, 0, 0, 0);
     return d;
   },
 
+  /** Upcoming `name` weekday; "next" skips same-day matches. */
+  _weekdayOf(name, mode) {
+    const target = WEEKDAYS.indexOf(name.toLowerCase());
+    if (target === -1) return null;
+    const now = new Date();
+    let diff = (target - now.getDay() + 7) % 7;
+    if (mode === "next" && diff === 0) diff = 7;
+    return this._at9am(diff);
+  },
 };

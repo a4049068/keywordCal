@@ -98,16 +98,14 @@ document.getElementById("run-btn").addEventListener("click", async () => {
     resultEl.textContent = (res && res.error) || "No response from background.";
     return;
   }
-  const r = res.result;
-  // evaluate() now returns one entry per matched rule.
-  const firedRules = Array.isArray(r) ? r : (r ? [r] : []);
+  const firedRules = res.result; // one entry per matched rule
   if (firedRules.length === 0) {
     resultEl.className = "ok";
     resultEl.textContent = `Ran on "${res.subject}" — no rules matched.`;
     return;
   }
   const labelOutcome = (x) => {
-    const o = x && "outcome" in x ? x.outcome : x; // tolerate old/new shapes
+    const o = x && x.outcome;
     const kind = (x && x.actionType) || "action";
     if (!o) return `${kind}: failed (see Error Console)`;
     if (o.ok === true) return `${kind}: created in "${o.calendarName || "calendar"}"`;
