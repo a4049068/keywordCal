@@ -19,7 +19,6 @@
 
 ChromeUtils.defineESModuleGetters(this, {
   ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
-  CalEvents: "resource:///modules/CalEvents.sys.mjs",
 });
 
 // JSON schema for the privileged API surface exposed to this add-on's own
