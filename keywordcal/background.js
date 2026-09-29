@@ -177,11 +177,14 @@ browser.runtime.onMessage.addListener(async (msg) => {
       const { ctx, error } = await _selectedContext();
       if (error) return { ok: false, error };
       const rules = await RuleStore.getActiveRules();
+      const matches = [];
+      for (const rule of rules) {
+        matches.push({ rule, passed: await RuleEngine._matchedConditions(ctx, rule) });
+      }
       return {
         ok: true,
         subject: ctx.subject,
-        matches: rules
-          .map((r) => ({ rule: r, passed: RuleEngine._matchedConditions(ctx, r) }))
+        matches: matches
           .filter(({ passed }) => passed)
           .map(({ rule, passed }) => ({
             name: rule.name,
@@ -207,6 +210,18 @@ browser.runtime.onMessage.addListener(async (msg) => {
     case "keywordcal:undoLast": {
       const res = await CalendarWriter.undoLast();
       return res || { ok: false, error: "calendar bridge unavailable" };
+    }
+
+    case "keywordcal:getPendingDates": {
+      return { pending: await CalendarWriter.getPendingDates() };
+    }
+
+    case "keywordcal:approvePendingDate": {
+      return CalendarWriter.approvePendingDate(msg.pendingId, msg.date);
+    }
+
+    case "keywordcal:skipPendingDate": {
+      return CalendarWriter.skipPendingDate(msg.pendingId);
     }
 
     case "keywordcal:listCalendars": {

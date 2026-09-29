@@ -106,6 +106,7 @@ function addActionRow(action = {}) {
   block.querySelector(".action-desc-template").value = action.descriptionTemplate ?? "{sender}";
   block.querySelector(".action-date-source").value = action.dateSource || "extract";
   block.querySelector(".action-date-pattern").value = action.datePattern || "";
+  block.querySelector(".action-year-policy").value = action.yearPolicy || "message-year";
   block.querySelector(".action-fixed-offset").value = action.fixedOffsetDays ?? 0;
   block.querySelector(".action-duration").value = action.durationMinutes ?? 60;
   block.querySelector(".action-reminders").value = (action.reminderMinutes || []).join(", ");
@@ -145,6 +146,7 @@ function collectActions() {
       descriptionTemplate: block.querySelector(".action-desc-template").value,
       dateSource,
       datePattern: block.querySelector(".action-date-pattern").value || undefined,
+      yearPolicy: block.querySelector(".action-year-policy").value,
       fixedOffsetDays: dateSource === "fixed" && Number.isFinite(fixedOffset) ? fixedOffset : undefined,
       durationMinutes: Number(block.querySelector(".action-duration").value) || 0,
       reminderMinutes: block
@@ -251,6 +253,14 @@ async function saveRule(event) {
   }
   if (conditions.length === 0) {
     alert("A rule needs at least one condition with a value.");
+    return;
+  }
+  if (conditions.some((condition) => {
+    if (condition.field !== "header") return false;
+    const separator = condition.value.indexOf("::");
+    return separator < 1 || !condition.value.slice(separator + 2).trim();
+  })) {
+    alert("Header conditions must use Header-Name::pattern format.");
     return;
   }
   if (actions.length === 0) {

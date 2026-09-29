@@ -27,6 +27,7 @@
   "background": {
     "scripts": [
       "lib/ruleStore.js",
+      "lib/regexMatcher.js",
       "lib/dateParser.js",
       "lib/templateResolver.js",
       "lib/calendarWriter.js",

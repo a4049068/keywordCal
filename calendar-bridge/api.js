@@ -153,6 +153,28 @@ class BridgeParent extends ExtensionAPI {
               return { ok: false, error: `calendar "${target.name}" is read-only` };
             }
 
+            if (details.uid) {
+              try {
+                const items = await target.getItemsAsArray(
+                  Ci.calICalendar.ITEM_FILTER_ALL_ITEMS, 0, null, null
+                );
+                const existing = Array.from(items).find(
+                  (candidate) => (candidate.getProperty("UID") || "") === details.uid ||
+                    candidate.id === details.uid
+                );
+                if (existing) {
+                  return {
+                    ok: true,
+                    id: String(existing.hashId || existing.id || ""),
+                    calendarName: target.name,
+                    existing: true,
+                  };
+                }
+              } catch (lookupError) {
+                warn("could not check for an existing UID; continuing with create:", lookupError);
+              }
+            }
+
             // Plain XPCOM item creation:
             //   events -> @mozilla.org/calendar/event;1 (calIEvent)
             //   tasks  -> @mozilla.org/calendar/todo;1  (calITodo)

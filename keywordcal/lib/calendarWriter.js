@@ -22,6 +22,9 @@ const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
 const UNDO_KEY = "keywordcal_undo_queue";
 const UNDO_TTL_MS = 86400000; // undo entries expire after 24h
 const UNDO_MAX = 50;
+const PENDING_KEY = "keywordcal_pending_dates";
+const PENDING_TTL_MS = 604800000;
+const PENDING_MAX = 50;
 const DEDUPE_WINDOW_MS = 180000; // suppress duplicate deliveries within 3 min
 
 // Duplicate-delivery guard (IMAP re-fetches hand us the same message twice).
@@ -41,9 +44,15 @@ async function _getQueue() {
   return Array.isArray(data[UNDO_KEY]) ? data[UNDO_KEY] : [];
 }
 
+async function _getPendingQueue() {
+  const data = (await browser.storage.local.get(PENDING_KEY)) || {};
+  return Array.isArray(data[PENDING_KEY]) ? data[PENDING_KEY] : [];
+}
+
 const CalendarWriter = {
   _bridgeId: null,
   _discoveryPromise: null,
+  _pendingInFlight: new Set(),
   DEDUPE_WINDOW_MS,
   shouldSkipDuplicate,
 
@@ -161,6 +170,65 @@ const CalendarWriter = {
     return reply;
   },
 
+  async getPendingDates() {
+    const queue = await _getPendingQueue();
+    const fresh = queue.filter((entry) => Date.now() - entry.createdAt < PENDING_TTL_MS);
+    if (fresh.length !== queue.length) {
+      await browser.storage.local.set({ [PENDING_KEY]: fresh });
+    }
+    return fresh.sort((a, b) => a.createdAt - b.createdAt);
+  },
+
+  async _enqueuePendingDate(entry) {
+    const queue = (await this.getPendingDates());
+    const existing = queue.find((pending) => pending.dedupeKey === entry.dedupeKey);
+    if (existing) return existing;
+    queue.push(entry);
+    while (queue.length > PENDING_MAX) queue.shift();
+    await browser.storage.local.set({ [PENDING_KEY]: queue });
+    return entry;
+  },
+
+  async skipPendingDate(pendingId) {
+    const queue = await this.getPendingDates();
+    const remaining = queue.filter((entry) => entry.id !== pendingId);
+    if (remaining.length === queue.length) return { ok: false, error: "pending date not found" };
+    await browser.storage.local.set({ [PENDING_KEY]: remaining });
+    return { ok: true };
+  },
+
+  async approvePendingDate(pendingId, dateValue) {
+    if (this._pendingInFlight.has(pendingId)) {
+      return { ok: false, error: "date confirmation is already being processed" };
+    }
+    const entry = (await this.getPendingDates()).find((pending) => pending.id === pendingId);
+    if (!entry) return { ok: false, error: "pending date not found" };
+    const date = new Date(dateValue);
+    if (isNaN(date.getTime())) return { ok: false, error: "invalid confirmed date" };
+
+    this._pendingInFlight.add(pendingId);
+    try {
+      const item = { ...entry.item };
+      if (item.kind === "task") {
+        item.dueDate = date.toISOString();
+      } else {
+        item.startDate = date.toISOString();
+        item.endDate = new Date(date.getTime() + item.durationMinutes * 60000).toISOString();
+      }
+      const result = await this._createResolvedItem(item);
+      if (result?.ok === true || result?.fallback === "compose") {
+        const queue = await this.getPendingDates();
+        await browser.storage.local.set({
+          [PENDING_KEY]: queue.filter((pending) => pending.id !== pendingId),
+        });
+        return { ok: true, title: item.title, calendarName: result.calendarName || "calendar" };
+      }
+      return result || { ok: false, error: "calendar item could not be created" };
+    } finally {
+      this._pendingInFlight.delete(pendingId);
+    }
+  },
+
   // ---------- Queries ----------
 
   /** [{ id, name, type, color, canWrite }] or null when no bridge answers. */
@@ -203,7 +271,7 @@ const CalendarWriter = {
     }
     if (created.ok) {
       created.calendarName ||= await this._calendarLabel(item.calendarId);
-      if (created.id) {
+      if (created.id && !created.existing) {
         await this.pushUndo({ itemId: created.id, calendarId: item.calendarId, kind: item.kind, title: item.title });
       }
     }
@@ -214,16 +282,35 @@ const CalendarWriter = {
   // ---------- Item construction ----------
 
   /** Start date per §3.3 strategies: extract | received | fixed(+N days @9am). */
-  _resolveStartDate(msg, action) {
-    if (action.dateSource === "extract") {
-      return DateParser.extract(msg.body, action.datePattern) || msg.date;
+  async _resolveStartDate(msg, action) {
+    if (action.dateOverride) {
+      const date = new Date(action.dateOverride);
+      if (!isNaN(date.getTime())) return { date, uncertain: false, source: "user-confirmed" };
     }
-    if (action.dateSource === "received") return msg.date;
+    if (action.dateSource === "extract") {
+      const extracted = await DateParser.extract(msg.body, action.datePattern, {
+        messageDate: msg.date,
+        yearPolicy: action.yearPolicy || "message-year",
+      });
+      if (extracted) return extracted;
+      return {
+        date: msg.date || new Date(),
+        source: "message-date-fallback",
+        token: "",
+        yearInferred: false,
+        candidateCount: 0,
+        uncertain: true,
+        reason: "No date was identified; using the message date as a suggestion.",
+      };
+    }
+    if (action.dateSource === "received") {
+      return { date: msg.date, source: "message-date", uncertain: false };
+    }
     const d = new Date();
     const offset = Number(action.fixedOffsetDays);
     if (Number.isFinite(offset) && offset !== 0) d.setDate(d.getDate() + offset);
     d.setHours(9, 0, 0, 0);
-    return d;
+    return { date: d, source: "fixed-offset", uncertain: false };
   },
 
   /** Minimal valid iCalendar doc; UTC dates so no VTIMEZONE is needed. */
@@ -280,7 +367,7 @@ const CalendarWriter = {
 
   // ---------- Actions ----------
 
-  /** Shared flow for createEvent/createTask: bridge first, .ics fallback. */
+  /** Resolve dates, queue uncertain items, then share the bridge/.ics write path. */
   async _fileItem(msg, action, { kind, defaultDuration, checkConflicts }) {
     const title = TemplateResolver.resolve(action.titleTemplate, msg) || msg.subject || `KeywordCal ${kind}`;
     const description = TemplateResolver.resolve(action.descriptionTemplate, msg);
@@ -289,10 +376,13 @@ const CalendarWriter = {
     const uid = `keywordcal-${msg.id}-${Date.now()}@keywordcal.local`;
 
     let startDate = null, endDate = null, dueDate = null;
+    let resolvedDate;
     if (kind === "task") {
-      dueDate = this._resolveStartDate(msg, action);
+      resolvedDate = await this._resolveStartDate(msg, action);
+      dueDate = resolvedDate.date;
     } else {
-      startDate = this._resolveStartDate(msg, action);
+      resolvedDate = await this._resolveStartDate(msg, action);
+      startDate = resolvedDate.date;
       if (!startDate) {
         this._notify(`Could not determine a date for "${title}" — skipped.`);
         return { ok: false, error: "no date could be determined" };
@@ -300,13 +390,55 @@ const CalendarWriter = {
       endDate = new Date(startDate.getTime() + (action.durationMinutes ?? defaultDuration) * 60000);
     }
 
-    const created = await this._bridgeCreate(kind === "task"
-      ? { kind, calendarId, uid, title, description, dueDate: dueDate ? dueDate.toISOString() : null, alarms, category: action.category || null }
-      : { kind, calendarId, uid, title, description, startDate: startDate.toISOString(), endDate: endDate.toISOString(), alarms, category: action.category || null });
+    const item = {
+      kind,
+      calendarId,
+      uid,
+      title,
+      description,
+      dueDate: dueDate ? dueDate.toISOString() : null,
+      startDate: startDate ? startDate.toISOString() : null,
+      endDate: endDate ? endDate.toISOString() : null,
+      durationMinutes: action.durationMinutes ?? defaultDuration ?? 0,
+      alarms,
+      category: action.category || null,
+      checkConflicts,
+    };
+
+    if (resolvedDate.uncertain) {
+      const pending = await this._enqueuePendingDate({
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        dedupeKey: `${msg.id}:${JSON.stringify({ kind, calendarId, action })}`,
+        subject: msg.subject || "(no subject)",
+        item,
+        suggestion: {
+          date: resolvedDate.date.toISOString(),
+          token: resolvedDate.token || "",
+          source: resolvedDate.source,
+          candidateCount: resolvedDate.candidateCount || 0,
+          reason: resolvedDate.reason || (resolvedDate.yearInferred
+            ? `The year was inferred using the ${action.yearPolicy || "message-year"} policy.`
+            : "More than one date was found in the message."),
+        },
+      });
+      this._notify(`Date confirmation needed for "${title}". Review it in the KeywordCal popup.`);
+      return { pendingConfirmation: true, pendingId: pending.id, suggestedDate: pending.suggestion.date };
+    }
+
+    return this._createResolvedItem(item);
+  },
+
+  async _createResolvedItem(item) {
+    const { kind, calendarId, uid, title, description, alarms, category } = item;
+    const startDate = item.startDate ? new Date(item.startDate) : null;
+    const endDate = item.endDate ? new Date(item.endDate) : null;
+    const dueDate = item.dueDate ? new Date(item.dueDate) : null;
+    const created = await this._bridgeCreate(item);
 
     if (created && created.ok) {
       console.log(`[KeywordCal] ${kind} created via bridge: "${title}" (${created.id})`);
-      if (checkConflicts) {
+      if (item.checkConflicts && startDate && endDate) {
         try {
           const conflicts = await this.findConflicts(calendarId, startDate, endDate);
           if (conflicts.length) {
@@ -327,7 +459,7 @@ const CalendarWriter = {
     }
 
     try {
-      const ics = this.buildICS({ uid, title, description, startDate, endDate, dueDate, isTask: kind === "task", alarms, category: action.category });
+      const ics = this.buildICS({ uid, title, description, startDate, endDate, dueDate, isTask: kind === "task", alarms, category });
       await this.createViaCompose(ics, title, kind);
       this._notify(`No calendar bridge found — opened an .ics draft for: "${title}"`);
       return { fallback: "compose" };

@@ -96,7 +96,7 @@
           <option value="matches">matches (regex)</option>
         </select>
       </td>
-      <td><input type="text" class="cond-value" placeholder="value or regex" /></td>
+      <td><input type="text" class="cond-value" placeholder="value or regex; headers: Name::pattern" /></td>
       <td><button type="button" class="secondary small remove-condition">✕</button></td>
     </tr>
   </template>
@@ -130,6 +130,11 @@
         <input type="text" class="action-date-pattern" placeholder="date regex (optional)" />
         <label>Offset (days)</label>
         <input type="number" class="action-fixed-offset" step="1" min="-365" max="365" value="0" title="Only used with 'Now' date source: start the event this many days from today" />
+        <label>Yearless dates</label>
+        <select class="action-year-policy">
+          <option value="message-year">Use message year</option>
+          <option value="upcoming">Use upcoming occurrence</option>
+        </select>
       </div>
       <div class="row">
         <label>Duration (min)</label>

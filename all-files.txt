@@ -1,0 +1,2760 @@
+===== FILE: .github/workflows/build-extensions.yml [utf-8] =====
+name: Build Thunderbird Extensions
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifests
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+
+          manifests = [
+            pathlib.Path('keywordcal/manifest.json'),
+            pathlib.Path('calendar-bridge/manifest.json'),
+          ]
+          versions = []
+          for path in manifests:
+            with path.open() as f:
+              manifest = json.load(f)
+            versions.append(manifest['version'])
+
+          if os.environ.get('GITHUB_REF_TYPE') == 'tag':
+            expected = f"v{versions[0]}"
+            if any(version != versions[0] for version in versions) or os.environ['GITHUB_REF_NAME'] != expected:
+              raise SystemExit(f"Release tag must be {expected} and match both add-on versions: {versions}")
+
+          with pathlib.Path('calendar-bridge/schema.json').open() as f:
+            json.load(f)
+          print(f"manifests and schema valid; versions: {versions}")
+          PY
+
+      - name: Check JavaScript syntax
+        run: find keywordcal calendar-bridge -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Build extension packages
+        run: |
+          mkdir -p dist
+          (cd keywordcal && zip -qr ../dist/keywordcal.xpi .)
+          (cd calendar-bridge && zip -qr ../dist/calendar-bridge.xpi .)
+          ls -l dist
+
+      - name: Verify extension packages
+        run: |
+          python - <<'PY'
+          import zipfile
+
+          packages = {
+              'dist/keywordcal.xpi': {'manifest.json', '_locales/en/messages.json'},
+              'dist/calendar-bridge.xpi': {'manifest.json', 'api.js', 'schema.json'},
+          }
+          for path, required in packages.items():
+              with zipfile.ZipFile(path) as package:
+                  missing = required - set(package.namelist())
+                  if missing:
+                      raise SystemExit(f"{path} is missing: {sorted(missing)}")
+          print('both XPI packages contain required files')
+          PY
+
+      - name: Upload as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: thunderbird-extensions
+          path: dist/*.xpi
+          if-no-files-found: error
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/keywordcal.xpi
+            dist/calendar-bridge.xpi
+          generate_release_notes: true
+===== END FILE: .github/workflows/build-extensions.yml =====
+
+===== FILE: .gitignore [utf-8] =====
+(empty)node_modules/
+.next/
+dist/
+build/
+*.log
+node_modules/
+===== END FILE: .gitignore =====
+
+===== FILE: README.md [utf-8] =====
+# KeywordCal Shipping Guide
+
+This repository ships two Thunderbird add-ons:
+
+- `keywordcal.xpi`: the KeywordCal extension.
+- `calendar-bridge.xpi`: the companion calendar bridge.
+
+Both versions currently live in their respective `manifest.json` files and must match the release tag. For example, version `1.4.0` is released with the tag `v1.4.0`.
+
+## Release Process
+
+1. Set the same valid version in `keywordcal/manifest.json` and `calendar-bridge/manifest.json`.
+2. Run the local checks and package build below.
+3. Commit and push the version changes.
+4. Create and push the matching tag:
+
+   ```sh
+   git tag v1.4.0
+   git push origin v1.4.0
+   ```
+
+5. GitHub Actions validates the source, builds both XPIs, verifies their contents, and creates a GitHub Release with generated notes. The release contains two separate downloads.
+
+Pushes, pull requests, and manual workflow runs build the packages and upload a workflow artifact. Only a `v*` tag creates a GitHub Release.
+
+## Local Build And Verification
+
+Run from the repository root. This matches the workflow's checks and writes the two packages to `dist/`.
+
+```sh
+set -eu
+
+find keywordcal calendar-bridge -name '*.js' -print0 | xargs -0 -n1 node --check
+
+python - <<'PY'
+import json
+import pathlib
+
+for path in (
+    pathlib.Path('keywordcal/manifest.json'),
+    pathlib.Path('calendar-bridge/manifest.json'),
+    pathlib.Path('calendar-bridge/schema.json'),
+):
+    with path.open() as source:
+        json.load(source)
+
+main = json.loads(pathlib.Path('keywordcal/manifest.json').read_text())
+bridge = json.loads(pathlib.Path('calendar-bridge/manifest.json').read_text())
+if main['version'] != bridge['version']:
+    raise SystemExit(f"Add-on versions differ: {main['version']} != {bridge['version']}")
+print(f"Source checks passed for version {main['version']}.")
+PY
+
+mkdir -p dist
+(cd keywordcal && zip -qr ../dist/keywordcal.xpi .)
+(cd calendar-bridge && zip -qr ../dist/calendar-bridge.xpi .)
+
+python - <<'PY'
+import zipfile
+
+packages = {
+    'dist/keywordcal.xpi': {'manifest.json', '_locales/en/messages.json'},
+    'dist/calendar-bridge.xpi': {'manifest.json', 'api.js', 'schema.json'},
+}
+for path, required in packages.items():
+    with zipfile.ZipFile(path) as package:
+        missing = required - set(package.namelist())
+        if missing:
+            raise SystemExit(f"{path} is missing: {sorted(missing)}")
+print('Both XPIs contain their required files.')
+PY
+```
+
+## GitHub Actions Workflow
+
+The executable workflow is `.github/workflows/build-extensions.yml`. Its full contents are below.
+
+```yaml
+name: Build Thunderbird Extensions
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate manifests
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+
+          manifests = [
+            pathlib.Path('keywordcal/manifest.json'),
+            pathlib.Path('calendar-bridge/manifest.json'),
+          ]
+          versions = []
+          for path in manifests:
+            with path.open() as f:
+              manifest = json.load(f)
+            versions.append(manifest['version'])
+
+          if os.environ.get('GITHUB_REF_TYPE') == 'tag':
+            expected = f"v{versions[0]}"
+            if any(version != versions[0] for version in versions) or os.environ['GITHUB_REF_NAME'] != expected:
+              raise SystemExit(f"Release tag must be {expected} and match both add-on versions: {versions}")
+
+          with pathlib.Path('calendar-bridge/schema.json').open() as f:
+            json.load(f)
+          print(f"manifests and schema valid; versions: {versions}")
+          PY
+
+      - name: Check JavaScript syntax
+        run: find keywordcal calendar-bridge -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Build extension packages
+        run: |
+          mkdir -p dist
+          (cd keywordcal && zip -qr ../dist/keywordcal.xpi .)
+          (cd calendar-bridge && zip -qr ../dist/calendar-bridge.xpi .)
+          ls -l dist
+
+      - name: Verify extension packages
+        run: |
+          python - <<'PY'
+          import zipfile
+
+          packages = {
+              'dist/keywordcal.xpi': {'manifest.json', '_locales/en/messages.json'},
+              'dist/calendar-bridge.xpi': {'manifest.json', 'api.js', 'schema.json'},
+          }
+          for path, required in packages.items():
+              with zipfile.ZipFile(path) as package:
+                  missing = required - set(package.namelist())
+                  if missing:
+                      raise SystemExit(f"{path} is missing: {sorted(missing)}")
+          print('both XPI packages contain required files')
+          PY
+
+      - name: Upload as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: thunderbird-extensions
+          path: dist/*.xpi
+          if-no-files-found: error
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/keywordcal.xpi
+            dist/calendar-bridge.xpi
+          generate_release_notes: true
+```
+===== END FILE: README.md =====
+
+===== FILE: calendar-bridge/api.js [utf-8] =====
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+"use strict";
+
+/**
+ * KeywordCal Calendar Bridge — privileged experiment API (parent process).
+ *
+ * Provides three functions to this add-on's own background script:
+ *   listCalendars() -> [{ id, name, type, color, canWrite }]
+ *   createItem({ calendarId, kind, ... }) -> { ok, id, calendarName }
+ *                                          | { ok:false, error }
+ *   deleteItem({ calendarId, itemId })    -> { ok } | { ok:false, error }
+ * (deleteItem powers KeywordCal's "Undo last action" feature.)
+ *
+ * Everything here uses plain XPCOM contracts only — no ES-module imports,
+ * no ChromeUtils/Cu (those are unavailable inside the WebExtension sandbox
+ * and caused the earlier load errors). Cc/Ci come from the "main" scope;
+ * ExtensionAPI comes from the "addon_parent" scope (see manifest scopes).
+ * Verbose logging at every step so failures are diagnosable in the Browser
+ * Console.
+ */
+
+/* global ExtensionAPI, Cc, Ci */
+
+const LOG_PREFIX = "[KeywordCal Bridge]";
+function log(...args) {
+  console.log(LOG_PREFIX, ...args);
+}
+function warn(...args) {
+  console.warn(LOG_PREFIX, ...args);
+}
+function errlog(...args) {
+  console.error(LOG_PREFIX, ...args);
+}
+
+// ---------- XPCOM helpers ----------
+
+const SERVICES = {
+  manager: ["@mozilla.org/calendar/manager;1", "calICalendarManager"],
+  tzService: ["@mozilla.org/calendar/timezone-service;1", "calITimezoneService"],
+};
+function svc(name) {
+  const [contract, iface] = SERVICES[name];
+  return Cc[contract].getService(Ci[iface]);
+}
+
+/**
+ * Build a calIDateTime from an ISO string in the given timezone (local
+ * wall-clock semantics — matches how a user typing "tomorrow 9am" means it).
+ * Throws on unusable input so callers surface a clean error.
+ */
+function makeDateTime(iso, tz) {
+  const dateValue = new Date(iso);
+  if (isNaN(dateValue.getTime())) {
+    throw new Error(`invalid date value: ${iso}`);
+  }
+  const dt = Cc["@mozilla.org/calendar/datetime;1"].createInstance(Ci.calIDateTime);
+  dt.timezone = tz || svc("tzService").getTimezone("floating");
+  dt.year = dateValue.getFullYear();
+  dt.month = dateValue.getMonth();
+  dt.day = dateValue.getDate();
+  dt.hour = dateValue.getHours();
+  dt.minute = dateValue.getMinutes();
+  dt.second = dateValue.getSeconds();
+  return dt;
+}
+
+/**
+ * Resolve a calendar by id, exact name, or case-insensitive substring.
+ * ""/"default" resolves to the default event/task calendar, falling back
+ * to the first writable local calendar. Returns { cal } or { error }.
+ */
+function resolveCalendar(wanted, kind) {
+  const calendars = svc("manager").getCalendars();
+  log(
+    `resolveCalendar("${wanted}", ${kind}): ${calendars.length} calendar(s):`,
+    calendars.map((c) => `${c.name}[${c.id}]`).join(", ")
+  );
+  if (!calendars.length) {
+    return { error: "no calendars are configured in Thunderbird" };
+  }
+
+  if (!wanted || wanted === "default") {
+    let def = null;
+    try {
+      const mgr = svc("manager");
+      def = kind === "task" ? mgr.getDefaultTaskCalendar?.() : mgr.getDefaultCalendar?.();
+    } catch (e) {
+      warn("could not query default calendar:", e);
+    }
+    const found =
+      (def && calendars.find((c) => c.id === def.id)) ||
+      calendars.find((c) => c.type === "local" && !c.readOnly) ||
+      calendars.find((c) => !c.readOnly) ||
+      calendars[0];
+    log(`resolved default -> "${found.name}" (${found.id})`);
+    return { cal: found };
+  }
+
+  const found =
+    calendars.find((c) => c.id === wanted) ||
+    calendars.find((c) => (c.name || "") === wanted) ||
+    calendars.find((c) => (c.name || "").toLowerCase().includes(wanted.toLowerCase()));
+  if (!found) {
+    const names = calendars.map((c) => `"${c.name}" (${c.id})`).join(", ");
+    return {
+      error: `calendar "${wanted}" not found. Available: ${names}`,
+      available: calendars.map((c) => ({ id: c.id, name: c.name })),
+    };
+  }
+  log(`resolved "${wanted}" -> ${found.id}`);
+  return { cal: found };
+}
+
+// ---------- Experiment API implementation ----------
+
+class BridgeParent extends ExtensionAPI {
+  getAPI(context) {
+    log("BridgeParent API instantiated");
+
+    return {
+      BridgeParent: {
+        async listCalendars() {
+          const out = svc("manager")
+            .getCalendars()
+            .map((c) => ({
+              id: c.id,
+              name: c.name || "(unnamed)",
+              type: c.type || "",
+              color:
+                (typeof c.getProperty === "function" ? c.getProperty("color") : "") || "",
+              canWrite: !c.readOnly,
+            }));
+          log(`listCalendars -> ${out.length}:`, out.map((c) => c.name).join(", "));
+          return out;
+        },
+
+        async createItem(details) {
+          log("createItem called:", JSON.stringify(details));
+          try {
+            const isTask = details.kind === "task";
+            const { cal: target, error } = resolveCalendar(
+              details.calendarId,
+              isTask ? "task" : "event"
+            );
+            if (error) {
+              warn("createItem refused:", error);
+              return { ok: false, error };
+            }
+            if (target.readOnly) {
+              return { ok: false, error: `calendar "${target.name}" is read-only` };
+            }
+
+            // Plain XPCOM item creation:
+            //   events -> @mozilla.org/calendar/event;1 (calIEvent)
+            //   tasks  -> @mozilla.org/calendar/todo;1  (calITodo)
+            const item = isTask
+              ? Cc["@mozilla.org/calendar/todo;1"].createInstance(Ci.calITodo)
+              : Cc["@mozilla.org/calendar/event;1"].createInstance(Ci.calIEvent);
+
+            item.calendar = target.superCalendar;
+            item.title = details.title || "KeywordCal item";
+            if (details.description) item.description = details.description;
+            if (details.category) item.categories = [details.category];
+            if (details.uid) item.setProperty("UID", details.uid);
+
+            let tz = null;
+            try {
+              const tzName = target.defaultTimezone?.name || "floating";
+              tz = svc("tzService").getTimezone(tzName);
+            } catch (e) {
+              warn("timezone lookup failed, using floating:", e);
+            }
+
+            if (isTask) {
+              if (details.dueDate) item.dueDate = makeDateTime(details.dueDate, tz);
+              item.isCompleted = false;
+            } else {
+              item.startDate = makeDateTime(details.startDate, tz);
+              item.endDate = makeDateTime(details.endDate, tz);
+            }
+
+            for (const mins of details.alarms || []) {
+              const alarm = Cc["@mozilla.org/calendar/alarm;1"].createInstance(Ci.calIAlarm);
+              const offset = Cc["@mozilla.org/calendar/duration;1"].createInstance(Ci.calIDuration);
+              offset.inSeconds = -Math.abs(Number(mins)) * 60;
+              alarm.action = "DISPLAY";
+              alarm.related = isTask ? Ci.calIAlarm.ALARM_RELATED_END : Ci.calIAlarm.ALARM_RELATED_START;
+              alarm.offset = offset;
+              alarm.description = item.title;
+              item.addAlarm(alarm);
+            }
+
+            const savedItem = await target.addItem(item);
+            const result = {
+              ok: true,
+              id: String(savedItem.hashId || savedItem.id || ""),
+              calendarName: target.name,
+            };
+            log("createItem succeeded:", JSON.stringify(result));
+            return result;
+          } catch (err) {
+            errlog("createItem failed:", err);
+            return { ok: false, error: String(err) };
+          }
+        },
+
+        async findConflicts(details) {
+          log("findConflicts called:", JSON.stringify(details));
+          try {
+            const { cal: target, error } = resolveCalendar(details.calendarId, "event");
+            if (error) return []; // conflict check is best-effort — never throws upward
+            const start = new Date(details.start);
+            const end = new Date(details.end);
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) return [];
+            const items = await target.getItemsAsArray(Ci.calICalendar.ITEM_FILTER_ALL_ITEMS, 0, null, null);
+            const out = Array.from(items)
+              .filter((i) => i.startDate && i.endDate)
+              .filter((i) => {
+                // Compare as UTC so DST shifts can't skew the overlap test.
+                const ms = (dt) => dt.nativeTime / 1000;
+                return ms(i.startDate) < end.getTime() && ms(i.endDate) > start.getTime();
+              })
+              .map((i) => ({
+                title: i.title || "(untitled)",
+                startDate: i.startDate?.toString?.() || "",
+                endDate: i.endDate?.toString?.() || "",
+              }));
+            log(`findConflicts -> ${out.length} overlapping event(s)`);
+            return out;
+          } catch (err) {
+            warn("findConflicts failed (ignored):", err);
+            return [];
+          }
+        },
+
+        async deleteItem(details) {
+          log("deleteItem called:", JSON.stringify(details));
+          try {
+            const wanted = String((details && details.itemId) || "");
+            if (!wanted) return { ok: false, error: "no itemId given" };
+
+            const { cal: target, error } = resolveCalendar(
+              details.calendarId,
+              details.kind === "task" ? "task" : "event"
+            );
+            if (error) {
+              warn("deleteItem refused:", error);
+              return { ok: false, error };
+            }
+
+            const items = await target.getItemsAsArray(Ci.calICalendar.ITEM_FILTER_ALL_ITEMS, 0, null, null);
+            // Match by numeric hashId first (what createItem returned), then
+            // fall back to UID / backend id so hand-edited items still match.
+            const hit = Array.from(items).find(
+              (i) =>
+                String(i.hashId) === wanted ||
+                (i.getProperty("UID") || "") === wanted ||
+                (i.id || "") === wanted
+            );
+            if (!hit) {
+              return { ok: false, error: `item "${wanted}" not found in "${target.name}"` };
+            }
+            await target.deleteItem(hit);
+            log(`deleteItem removed "${hit.title}" from "${target.name}"`);
+            return { ok: true, title: hit.title, calendarName: target.name };
+          } catch (err) {
+            errlog("deleteItem failed:", err);
+            return { ok: false, error: String(err) };
+          }
+        },
+      },
+    };
+  }
+}
+===== END FILE: calendar-bridge/api.js =====
+
+===== FILE: calendar-bridge/background.js [utf-8] =====
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+"use strict";
+
+/**
+ * KeywordCal Calendar Bridge — background script.
+ *
+ * Responsibilities (all verbose-logged so the Browser Console tells you
+ * exactly what happened):
+ *   1. Register this add-on's id in shared browser.storage.local under
+ *      "keywordcal_bridge_id" on startup/install/update. That is the
+ *      PRIMARY discovery channel KeywordCal uses (cross-extension
+ *      messaging is blocked by default privacy prefs, so we do NOT rely
+ *      on it).
+ *   2. Serve KeywordCal's messages: { keywordcal: "registry" } -> our id;
+ *      { method: "listCalendars" | "createItem" | "deleteItem", item? } -> forwarded to
+ *      the privileged BridgeParent experiment API defined in api.js.
+ *
+ * Only requests from KeywordCal itself are served; everything else is
+ * ignored and logged.
+ */
+
+// The bridge answers ANY sender that speaks the KeywordCal wire protocol
+// ({ keywordcal: "registry" } / { method: ... }). Sender-id allowlisting was
+// removed on purpose: under some Thunderbird routing modes external messages
+// arrive with an empty/undefined sender.id, which previously made the bridge
+// refuse legitimate KeywordCal calls ("unexpected sender" warnings). Foreign
+// add-ons never send KeywordCal-shaped payloads, so protocol-shape filtering
+// alone keeps them out.
+const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
+const KEYWORDCAL_HINT = "keywordcal@yourdomain.com"; // only used for log labeling
+const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem", "findConflicts"];
+const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
+const LOG_PREFIX = "[KeywordCal Bridge]";
+
+// Anything that isn't our known protocol shape (foreign add-on discovery
+// pings from CardBook/VFS Toolkit/FileLink, junk payloads, etc.) is expected
+// and harmless — drop it silently. Only KeywordCal-shaped traffic is served.
+function isForeignNoise(message) {
+  if (!message || typeof message !== "object") return true; // junk payload
+  return !(message.keywordcal === "registry" || BRIDGE_METHODS.includes(message.method));
+}
+
+function log(...args) { console.log(LOG_PREFIX, ...args); }
+function warn(...args) { console.warn(LOG_PREFIX, ...args); }
+
+// ---------- 1. Shared-storage registration ----------
+
+// The "storage" permission must be granted before browser.storage.local
+// exists; on temporary installs it can lag behind the background script's
+// first lines, so retry with backoff instead of giving up once.
+const RETRY_DELAYS_MS = [250, 1000, 3000, 8000, 20000];
+
+async function register(attempt = 0) {
+  try {
+    if (!browser.storage || !browser.storage.local) throw new Error("api missing");
+    await browser.storage.local.set({ [BRIDGE_STORAGE_KEY]: BRIDGE_ID });
+    log(`registered as "${BRIDGE_ID}" in shared storage (attempt ${attempt + 1})`);
+    return true;
+  } catch (e) {
+    if (attempt < RETRY_DELAYS_MS.length) {
+      log(`storage not ready (attempt ${attempt + 1}: ${e.message}) — retrying in ${RETRY_DELAYS_MS[attempt]}ms`);
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      return register(attempt + 1);
+    }
+    warn("storage permanently unavailable after retries — direct-message discovery still active; KeywordCal may fall back to .ics drafts");
+    return false;
+  }
+}
+
+register();
+browser.runtime.onStartup.addListener(() => register());
+browser.runtime.onInstalled.addListener((info) => {
+  log("onInstalled:", JSON.stringify(info));
+  register();
+});
+
+// ---------- 2. Message relay ----------
+
+async function handle(message, sender) {
+  if (!message || typeof message !== "object") return undefined;
+
+  // Serve KeywordCal's wire protocol from any sender. Foreign add-ons
+  // (CardBook/VFS Toolkit discovery pings etc.) never send KeywordCal-shaped
+  // payloads, so they fall into isForeignNoise() and are dropped silently —
+  // no misleading warnings when Thunderbird routes messages with an empty
+  // sender.id.
+  if (isForeignNoise(message)) return undefined;
+
+  if (sender && sender.id && sender.id !== BRIDGE_ID && sender.id !== KEYWORDCAL_HINT) {
+    log(`serving KeywordCal-shaped request from "${sender.id}"`);
+  }
+
+  if (message.keywordcal === "registry") {
+    log("registry probe answered");
+    return { extensionId: BRIDGE_ID, methods: BRIDGE_METHODS };
+  }
+
+  const method = message.method;
+  if (!BRIDGE_METHODS.includes(method)) {
+    warn(`unknown method "${method}" — ignoring`);
+    return undefined;
+  }
+
+  const api = browser.BridgeParent;
+  if (!api || typeof api[method] !== "function") {
+    warn(`BridgeParent.${method} unavailable — is the experiment API loaded?`);
+    return { ok: false, error: "BridgeParent experiment API unavailable" };
+  }
+
+  log(`relaying ${method} to experiment API`);
+  try {
+    const args = method === "listCalendars" ? [] : [message.item || {}];
+    return await api[method](...args);
+  } catch (err) {
+    warn(`${method} threw:`, err);
+    return { ok: false, error: String(err) };
+  }
+}
+
+// KeywordCal talks to us via runtime.sendMessage(bridgeId, ...) which
+// arrives on BOTH listeners below depending on how Thunderbird routes
+// same-origin cross-extension messages. Handle both identically.
+browser.runtime.onMessageExternal.addListener((message, sender) =>
+  handle(message, sender)
+);
+browser.runtime.onMessage.addListener((message, sender) =>
+  handle(message, sender)
+);
+
+log("background script loaded; waiting for KeywordCal");
+===== END FILE: calendar-bridge/background.js =====
+
+===== FILE: calendar-bridge/manifest.json [utf-8] =====
+{
+  "manifest_version": 2,
+  "name": "KeywordCal Calendar Bridge",
+  "version": "1.4.0",
+  "description": "Companion add-on that gives KeywordCal direct write access to Thunderbird calendars: events/tasks are filed silently into the calendar you pick per rule, with no compose windows. Install alongside KeywordCal.",
+  "homepage_url": "https://example.com/keywordcal/",
+  "developer": {
+    "name": "Your Name"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "author": "Your Name",
+  "applications": {
+    "gecko": {
+      "id": "keywordcal-bridge@yourdomain.com",
+      "strict_min_version": "128.0"
+    }
+  },
+  "experiment_apis": {
+    "BridgeParent": {
+      "schema": "schema.json",
+      "parent": {
+        "scopes": [
+          "addon_parent"
+        ],
+        "paths": [
+          [
+            "BridgeParent"
+          ]
+        ],
+        "script": "api.js"
+      }
+    }
+  },
+  "background": {
+    "scripts": [
+      "background.js"
+    ]
+  }
+}
+===== END FILE: calendar-bridge/manifest.json =====
+
+===== FILE: calendar-bridge/schema.json [utf-8] =====
+[
+  {
+    "namespace": "BridgeParent",
+    "description": "Privileged calendar access for the KeywordCal Calendar Bridge. Used only by this add-on's own background script.",
+    "functions": [
+      {
+        "name": "listCalendars",
+        "type": "function",
+        "description": "List all calendars configured in Thunderbird.",
+        "async": true,
+        "parameters": [],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "canWrite": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "createItem",
+        "type": "function",
+        "description": "Create an event or task in the named calendar.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
+        "name": "deleteItem",
+        "type": "function",
+        "description": "Delete an item (by hashId/UID) from the named calendar \u2014 powers KeywordCal's undo.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
+        "name": "findConflicts",
+        "type": "function",
+        "description": "Return events in the named calendar overlapping [start,end) \u2014 powers KeywordCal's conflict warning.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    ]
+  }
+]
+===== END FILE: calendar-bridge/schema.json =====
+
+===== FILE: keywordcal/_locales/en/messages.json [utf-8] =====
+{
+  "extensionDescription": {
+    "message": "Generate calendar events and reminders from email keywords using configurable rules.",
+    "description": "Description of the extension, displayed in the add-on manager."
+  },
+  "extensionName": {
+    "message": "KeywordCal",
+    "description": "Name of the extension."
+  }
+}
+===== END FILE: keywordcal/_locales/en/messages.json =====
+
+===== FILE: keywordcal/background.js [utf-8] =====
+/**
+ * KeywordCal - Background Service Worker
+ *
+ * 1. Listens for new mail and dispatches to the Rule Engine.
+ * 2. Provides a message API for the toolbar popup (status, run-on-selected,
+ *    test-run without writing).
+ * 3. Keeps the toolbar badge in sync with the number of active rules.
+ */
+
+"use strict";
+
+// ---------- Shared helpers ----------
+
+/**
+ * Recursively extract plain text from MIME parts.
+ */
+function extractPlainText(part) {
+  if (part.contentType === "text/plain" && part.body) {
+    return part.body;
+  }
+  if (part.parts) {
+    return part.parts.map(extractPlainText).join("\n");
+  }
+  // HTML-only messages: strip tags so keyword/date rules still work.
+  if (part.contentType === "text/html" && part.body) {
+    return part.body.replace(/<[^>]+>/g, " ");
+  }
+  return "";
+}
+
+/**
+ * Fetch headers + body for a message id and build the context object the
+ * Rule Engine evaluates.
+ */
+async function buildMessageContext(messageId) {
+  const header = await browser.messages.get(messageId);
+  const full = await browser.messages.getFull(messageId);
+  const body = extractPlainText(full);
+
+  // Thunderbird's MsgHdrWithObject returns `recipients` as an array of
+  // address objects ({ displayName, email, type }), not strings — joining
+  // those directly would produce "[object Object]" in rules/templates.
+  const recipients = (header.recipients || [])
+    .map((r) => (typeof r === "string" ? r : r.email || r.displayName || ""))
+    .filter(Boolean)
+    .join(", ");
+
+  return {
+    id: messageId,
+    subject: header.subject || "",
+    sender: header.author || "",
+    recipients,
+    date: header.date ? new Date(header.date) : new Date(),
+    body: body.slice(0, 50000), // Cap at 50KB
+    headers: header.headers || {}, // raw { name: [values] } map for header conditions
+  };
+}
+
+// ---------- Badge ----------
+
+async function refreshBadge() {
+  try {
+    const rules = await RuleStore.getActiveRules();
+    await browser.browserAction.setBadgeText({
+      text: rules.length > 0 ? String(rules.length) : "",
+    });
+    await browser.browserAction.setBadgeBackgroundColor({ color: "#0a84ff" });
+  } catch (e) {
+    /* badge is best-effort */
+  }
+}
+
+// Keep the badge in sync across every context that owns a copy of this
+// script (background page, options tab, popup): whenever the rule storage
+// key changes anywhere, recompute it.
+browser.storage.local.onChanged.addListener((changes) => {
+  if (changes[RuleStore.STORAGE_KEY]) refreshBadge();
+});
+
+// ---------- New-mail listener ----------
+
+browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
+  const incoming = Array.isArray(messages) ? messages : (messages ? [messages] : []);
+  console.log(`[KeywordCal] New mail in ${folder && folder.name ? folder.name : "unknown"}: ${incoming.length} message(s)`);
+
+  if (incoming.length === 0) return;
+
+  const rules = await RuleStore.getActiveRules();
+  if (rules.length === 0) return;
+
+  for (const message of incoming) {
+      if (!message || !message.id) continue;
+      if (CalendarWriter.shouldSkipDuplicate(message.id)) {
+        console.log(`[KeywordCal] Skipping duplicate delivery of message ${message.id} (within ${CalendarWriter.DEDUPE_WINDOW_MS / 1000}s window)`);
+        continue;
+      }
+      try {
+        const messageContext = await buildMessageContext(message.id);
+        await RuleEngine.evaluate(messageContext, rules);
+      } catch (err) {
+        console.error(`[KeywordCal] Error processing message ${message.id}:`, err);
+      }
+  }
+});
+
+// ---------- Popup / cross-page message API ----------
+
+/**
+ * Resolve the currently selected message; prefer Thunderbird's mailTabs API
+ * because the popup is not itself a mail tab and may not have a messageId.
+ */
+async function getSelectedMessageId() {
+  if (browser.mailTabs && typeof browser.mailTabs.getSelectedMessages === "function") {
+    try {
+      const selected = await browser.mailTabs.getSelectedMessages();
+      const list = Array.isArray(selected)
+        ? selected
+        : (selected && Array.isArray(selected.messages) ? selected.messages : []);
+      const first = list.find((message) => message && (message.id || message.messageId));
+      if (first) return first.id || first.messageId;
+    } catch (e) {
+      // Fall back to the tab heuristic below.
+    }
+  }
+
+  let tabs = [];
+  try {
+    tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) tabs = await browser.tabs.query({ active: true });
+  } catch (e) {
+    tabs = await browser.tabs.query({ active: true });
+  }
+  const tab = tabs.find((t) => t && t.messageId) || null;
+  return tab ? tab.messageId : null;
+}
+
+/**
+ * Resolve the currently selected message once, for both test and run.
+ */
+async function _selectedContext() {
+  const messageId = await getSelectedMessageId();
+  if (!messageId) {
+    return { error: "Select an email message first." };
+  }
+  try {
+    return { ctx: await buildMessageContext(messageId) };
+  } catch (err) {
+    return { error: String(err) };
+  }
+}
+
+browser.runtime.onMessage.addListener(async (msg) => {
+  if (!msg || typeof msg !== "object") return;
+
+  switch (msg.type) {
+    case "keywordcal:getStatus": {
+      const [all, bridgeId] = await Promise.all([
+        RuleStore.getAllRules(),
+        CalendarWriter.findBridge(),
+      ]);
+      const calendars = bridgeId ? await CalendarWriter.listCalendars() : null;
+      return {
+        totalRules: all.length,
+        activeRules: all.filter((r) => r.enabled).length,
+        lastTriggered: all
+          .map((r) => r.lastTriggered)
+          .filter(Boolean)
+          .sort()
+          .reverse()[0] || null,
+        bridgeInstalled: !!bridgeId,
+        calendars: calendars || [],
+      };
+    }
+
+    case "keywordcal:runOnSelected": {
+      // Dry run: which rules WOULD match the selected message (creates nothing).
+      const { ctx, error } = await _selectedContext();
+      if (error) return { ok: false, error };
+      const rules = await RuleStore.getActiveRules();
+      return {
+        ok: true,
+        subject: ctx.subject,
+        matches: rules
+          .map((r) => ({ rule: r, passed: RuleEngine._matchedConditions(ctx, r) }))
+          .filter(({ passed }) => passed)
+          .map(({ rule, passed }) => ({
+            name: rule.name,
+            actions: rule.actions.length,
+            why: passed.map((c) => `${c.field} ${c.operator} "${c.value}"`).join(rule.matchType === "all" ? " AND " : " OR "),
+          })),
+      };
+    }
+
+    case "keywordcal:executeOnSelected": {
+      // Actually run the engine on the selected message (creates events).
+      const { ctx, error } = await _selectedContext();
+      if (error) return { ok: false, error };
+      const result = await RuleEngine.evaluate(ctx, await RuleStore.getActiveRules());
+      return { ok: true, subject: ctx.subject, result };
+    }
+
+    case "keywordcal:getUndoStatus": {
+      const entry = await CalendarWriter.peekUndo();
+      return { available: !!entry, entry };
+    }
+
+    case "keywordcal:undoLast": {
+      const res = await CalendarWriter.undoLast();
+      return res || { ok: false, error: "calendar bridge unavailable" };
+    }
+
+    case "keywordcal:listCalendars": {
+      const bridgeId = await CalendarWriter.findBridge();
+      const calendars = bridgeId ? await CalendarWriter.listCalendars() : null;
+      return { bridgeInstalled: !!bridgeId, calendars: calendars || [] };
+    }
+
+    case "keywordcal:refreshBadge": {
+      // Called by the options page after it mutates rules (each document
+      // has its own globals in MV2, so RuleStore._write can't reach us).
+      await refreshBadge();
+      return { ok: true };
+    }
+
+    default:
+      return undefined;
+  }
+});
+
+// ---------- Lifecycle ----------
+
+browser.runtime.onStartup.addListener(refreshBadge);
+
+/**
+ * Seed default rules on first install.
+ */
+browser.runtime.onInstalled.addListener(async () => {
+  await RuleStore.seedDefaults();
+  await refreshBadge();
+});
+===== END FILE: keywordcal/background.js =====
+
+===== FILE: keywordcal/icons/icon-16.png [base64] =====
+iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAU0lEQVR42mNgwAFYMzb9R8YMxAJ0
+jSQZREgzXkOI1YzVEFI1YxiCLoEMsImjGIDNZEIGoBhCEwNICgeKDRj4WMBmCD4DiE6N2AygSn4g
+O1fiUgcA14bCYOiNfe0AAAAASUVORK5CYII=
+===== END FILE: keywordcal/icons/icon-16.png =====
+
+===== FILE: keywordcal/icons/icon-32.png [base64] =====
+iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAgUlEQVR42u2XwRIAEAhEXfyr7/OD
+XF0i2ZRRMy5m2DdaVEovRS61cYaZMBxEKgwBQYmLIKhNxuDMiyBmG5wCLCFWi3cBKKBred86hVvi
+JIQpACLXEnMGgFn+AyBMGLeA9Rr+9RfMvIDwAKweUC9IzEsybT+8U5a7aExctGZumlPN6Dhv4SHk
+D/1OAAAAAElFTkSuQmCC
+===== END FILE: keywordcal/icons/icon-32.png =====
+
+===== FILE: keywordcal/icons/icon-64.png [base64] =====
+iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAA5klEQVR42u3bQQqAMAxEUTfe1fN5
+QV25ErXWNs04v+BOhHlQiG0yTazYNS/rdvdYhS19bINLQfQKnR4jOngqiNHhhyFkCT4EImv4EITs
+4bsiqITvgqAWvimCavgmCOrhPyNYA5R+/Fgl70S/V43wNrwCwCsEa4C/7PtqBACcAf4e/hHBGsAl
+/CUCABUfUasDAADgAsBt/58QAAAAAAAAAMCrDmhSC1AJugPwOwwAp0KcCXIyzL2AMYBiHcDlKABm
+3SEhXSL0CNEpRq8g3aL0C9MxzswAkyPMDbmFZ2yOwUlGZxmeVl870+S6KpR8ICQAAAAASUVORK5C
+YII=
+===== END FILE: keywordcal/icons/icon-64.png =====
+
+===== FILE: keywordcal/lib/calendarWriter.js [utf-8] =====
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/**
+ * CalendarWriter - files events/tasks from matched messages.
+ *
+ * Path 1 (preferred): the Calendar Bridge companion add-on writes items
+ *   silently into the rule's chosen calendar. Discovery: shared
+ *   browser.storage.local key "keywordcal_bridge_id" (cross-extension
+ *   messaging is blocked by default prefs), then runtime.sendMessage.
+ * Path 2 (fallback, no bridge): open a compose window carrying an .ics
+ *   attachment; Thunderbird's "Add to calendar" bar files it for the user.
+ *
+ * Every step logs "[KeywordCal]" lines so the Browser Console is diagnostic.
+ */
+
+"use strict";
+
+const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem", "findConflicts"];
+const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
+const UNDO_KEY = "keywordcal_undo_queue";
+const UNDO_TTL_MS = 86400000; // undo entries expire after 24h
+const UNDO_MAX = 50;
+const DEDUPE_WINDOW_MS = 180000; // suppress duplicate deliveries within 3 min
+
+// Duplicate-delivery guard (IMAP re-fetches hand us the same message twice).
+// In-process Map suffices: sub-minute duplicates never survive a restart.
+const _seenMessages = new Map(); // messageId -> last processed epoch ms
+
+function shouldSkipDuplicate(messageId) {
+  const now = Date.now();
+  for (const [id, t] of _seenMessages) if (now - t > DEDUPE_WINDOW_MS) _seenMessages.delete(id);
+  if (_seenMessages.has(messageId)) return true;
+  _seenMessages.set(messageId, now);
+  return false;
+}
+
+async function _getQueue() {
+  const data = (await browser.storage.local.get(UNDO_KEY)) || {};
+  return Array.isArray(data[UNDO_KEY]) ? data[UNDO_KEY] : [];
+}
+
+const CalendarWriter = {
+  _bridgeId: null,
+  _discoveryPromise: null,
+  DEDUPE_WINDOW_MS,
+  shouldSkipDuplicate,
+
+  /** Find the bridge; returns its extension id or null when absent. */
+  async findBridge() {
+    if (this._bridgeId) return this._bridgeId;
+    if (this._discoveryPromise) return this._discoveryPromise;
+
+    this._discoveryPromise = (async () => {
+      let storedId = null;
+      try {
+        const data = await browser.storage.local.get(BRIDGE_STORAGE_KEY);
+        storedId = data && data[BRIDGE_STORAGE_KEY];
+      } catch (e) {
+        console.warn("[KeywordCal] bridge storage lookup failed:", e);
+      }
+
+      const candidates = [storedId, "keywordcal-bridge@yourdomain.com"].filter(
+        (value, index, all) => typeof value === "string" && value.includes("@") && all.indexOf(value) === index
+      );
+
+      if (candidates.length === 0) {
+        console.log("[KeywordCal] Calendar Bridge not registered in shared storage — " +
+          "is keywordcal-bridge installed AND enabled? Will fall back to .ics drafts.");
+        return null;
+      }
+
+      for (const candidate of candidates) {
+        for (const [label, probe] of [
+          ["targeted", () => browser.runtime.sendMessage(candidate, { keywordcal: "registry" })],
+          ["broadcast", () => browser.runtime.sendMessage({ keywordcal: "registry" })],
+        ]) {
+          try {
+            const reply = await probe();
+            if (reply && typeof reply.extensionId === "string" &&
+                Array.isArray(reply.methods) && reply.methods.some((m) => BRIDGE_METHODS.includes(m))) {
+              this._bridgeId = reply.extensionId;
+              if (candidate !== reply.extensionId) {
+                await browser.storage.local.set({ [BRIDGE_STORAGE_KEY]: reply.extensionId });
+              }
+              console.log(`[KeywordCal] Calendar Bridge found (${label}): ${this._bridgeId}`);
+              return this._bridgeId;
+            }
+            console.warn(`[KeywordCal] Bridge probe (${label}) got unexpected reply:`, reply);
+          } catch (err) {
+            console.log(`[KeywordCal] Bridge probe (${label}) failed: ${err} ` +
+              "(expected if cross-extension messaging is blocked)");
+          }
+        }
+      }
+
+      const fallbackId = candidates[0];
+      console.warn(`[KeywordCal] Bridge "${fallbackId}" not responding — using direct-call fallback; .ics drafts may be opened instead.`);
+      this._bridgeId = fallbackId;
+      return fallbackId;
+    })().finally(() => { this._discoveryPromise = null; });
+
+    return this._discoveryPromise;
+  },
+
+  forgetBridge() { this._bridgeId = null; },
+
+  /** One logging/error-handling path for every bridge round-trip. */
+  async _bridgeCall(payload, label) {
+    const bridgeId = await this.findBridge();
+    if (!bridgeId) return null;
+    try {
+      console.log(`[KeywordCal] -> bridge(${bridgeId}) ${label}`);
+      const reply = await browser.runtime.sendMessage(bridgeId, payload);
+      console.log(`[KeywordCal] <- bridge ${label}: ${JSON.stringify(reply)}`);
+      return reply;
+    } catch (err) {
+      console.warn(`[KeywordCal] Bridge ${label} failed:`, err);
+      this.forgetBridge();
+      return null;
+    }
+  },
+
+  // ---------- Undo queue (design doc §9) ----------
+
+  async pushUndo(entry) {
+    try {
+      const queue = await _getQueue();
+      queue.push({ ...entry, at: Date.now() });
+      while (queue.length > UNDO_MAX) queue.shift();
+      await browser.storage.local.set({ [UNDO_KEY]: queue });
+      console.log(`[KeywordCal] undo queue: ${queue.length} entry(ies), last "${entry.title}"`);
+    } catch (e) {
+      console.warn("[KeywordCal] could not persist undo queue:", e);
+    }
+  },
+
+  /** Most recent non-expired undo entry, or null. */
+  async peekUndo() {
+    const fresh = (await _getQueue()).filter((e) => Date.now() - (e.at || 0) < UNDO_TTL_MS);
+    return fresh.length ? fresh[fresh.length - 1] : null;
+  },
+
+  /** Delete the most recent bridge-created item and drop it from the queue. */
+  async undoLast() {
+    const entry = await this.peekUndo();
+    if (!entry) return { ok: false, error: "nothing to undo" };
+    const reply = await this._bridgeCall(
+      { method: "deleteItem", item: { calendarId: entry.calendarId, itemId: entry.itemId, kind: entry.kind } },
+      `deleteItem "${entry.title}"`
+    );
+    if (!reply) return { ok: false, error: "calendar bridge unavailable" };
+    if (reply.ok) {
+      const queue = await _getQueue();
+      const idx = queue.findIndex((e) => e.itemId === entry.itemId);
+      if (idx !== -1) queue.splice(idx, 1);
+      await browser.storage.local.set({ [UNDO_KEY]: queue });
+      this._notify(`Reverted: deleted "${entry.title}" from ${reply.calendarName || "calendar"}.`);
+    }
+    return reply;
+  },
+
+  // ---------- Queries ----------
+
+  /** [{ id, name, type, color, canWrite }] or null when no bridge answers. */
+  async listCalendars() {
+    const reply = await this._bridgeCall({ method: "listCalendars" }, "listCalendars");
+    return Array.isArray(reply) ? reply : null; // empty handler != broken bridge
+  },
+
+  /** Display name for a calendarId / free-text name typed in options. */
+  async _calendarLabel(calendarId) {
+    if (!calendarId || calendarId === "default") return "Default calendar";
+    const hit = (await this.listCalendars() || []).find(
+      (c) => c.id === calendarId || (c.name || "") === calendarId
+    );
+    return hit ? hit.name : calendarId;
+  },
+
+  /**
+   * Conflict detection (§9): overlapping events in [start, end). Warn-only —
+   * callers must never block creation on this; [] when bridge absent.
+   */
+  async findConflicts(calendarId, start, end) {
+    const reply = await this._bridgeCall(
+      { method: "findConflicts", item: { calendarId, start: start.toISOString(), end: end.toISOString() } },
+      `findConflicts(${calendarId})`
+    );
+    return Array.isArray(reply) ? reply.filter((e) => e && typeof e.title === "string") : [];
+  },
+
+  /** createItem via bridge; pushes onto undo queue on success. */
+  async _bridgeCreate(item) {
+    console.log(`[KeywordCal] -> bridge createItem "${item.title}" into "${item.calendarId}"`);
+    const created = await this._bridgeCall({ method: "createItem", item }, `createItem "${item.title}"`);
+    if (!created || typeof created.ok !== "boolean") {
+      // Silent/stale bridge: treat as absent so callers fall back to .ics
+      // drafts instead of dropping the event.
+      console.warn("[KeywordCal] Bridge returned an unexpected response:", created);
+      this.forgetBridge();
+      return null;
+    }
+    if (created.ok) {
+      created.calendarName ||= await this._calendarLabel(item.calendarId);
+      if (created.id) {
+        await this.pushUndo({ itemId: created.id, calendarId: item.calendarId, kind: item.kind, title: item.title });
+      }
+    }
+    console.log(`[KeywordCal] <- bridge createItem: ${JSON.stringify(created)}`);
+    return created;
+  },
+
+  // ---------- Item construction ----------
+
+  /** Start date per §3.3 strategies: extract | received | fixed(+N days @9am). */
+  _resolveStartDate(msg, action) {
+    if (action.dateSource === "extract") {
+      return DateParser.extract(msg.body, action.datePattern) || msg.date;
+    }
+    if (action.dateSource === "received") return msg.date;
+    const d = new Date();
+    const offset = Number(action.fixedOffsetDays);
+    if (Number.isFinite(offset) && offset !== 0) d.setDate(d.getDate() + offset);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  },
+
+  /** Minimal valid iCalendar doc; UTC dates so no VTIMEZONE is needed. */
+  buildICS({ uid, title, description, startDate, endDate, dueDate, isTask, alarms, category }) {
+    const fmt = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+    const esc = (s) => String(s || "").replace(/\\/g, "\\\\").replace(/\n/g, "\\n")
+      .replace(/;/g, "\\;").replace(/,/g, "\\,");
+    const lines = [
+      "BEGIN:VCALENDAR", "VERSION:2.0",
+      "PRODID:-//KeywordCal//Thunderbird//EN", "METHOD:PUBLISH",
+      isTask ? "BEGIN:VTODO" : "BEGIN:VEVENT",
+      `UID:${uid}`, `DTSTAMP:${fmt(new Date())}`,
+    ];
+    if (isTask) {
+      if (dueDate) lines.push(`DUE:${fmt(dueDate)}`);
+      lines.push("STATUS:NEEDS-ACTION");
+    } else {
+      lines.push(`DTSTART:${fmt(startDate)}`, `DTEND:${fmt(endDate)}`);
+    }
+    lines.push(`SUMMARY:${esc(title)}`);
+    if (description) lines.push(`DESCRIPTION:${esc(description)}`);
+    if (category) lines.push(`CATEGORIES:${esc(category)}`);
+    for (const mins of alarms || []) {
+      lines.push("BEGIN:VALARM", "ACTION:DISPLAY", `TRIGGER:-PT${mins}M`,
+        `DESCRIPTION:${esc(title)}`, "END:VALARM");
+    }
+    lines.push(isTask ? "END:VTODO" : "END:VEVENT", "END:VCALENDAR", "");
+    return lines.join("\r\n");
+  },
+
+  /** Compose window carrying the item as an .ics attachment (fallback path). */
+  async createViaCompose(icsText, title, kind) {
+    const safeTitle = (title || "KeywordCal item").replace(/[^\w \-]+/g, "").trim() || "event";
+    const structured = {
+      contentType: "multipart/mixed",
+      parts: [
+        {
+          contentType: "text/plain", encoding: "7bit",
+          content: `This ${kind} was generated by KeywordCal from a matching email.\n` +
+            "Open the attached .ics file to add it to any calendar.",
+        },
+        {
+          contentType: "text/calendar", encoding: "base64",
+          content: btoa(String.fromCharCode(...new TextEncoder().encode(icsText))),
+          disposition: "attachment", fileName: `${safeTitle.slice(0, 40)}.ics`,
+        },
+      ],
+    };
+    // identity null picks the default account.
+    await browser.compose.openComposeWindow(null, "new", {
+      subject: `[KeywordCal] ${safeTitle}`, isHtml: false, bodyText: "", structured,
+    });
+  },
+
+  // ---------- Actions ----------
+
+  /** Shared flow for createEvent/createTask: bridge first, .ics fallback. */
+  async _fileItem(msg, action, { kind, defaultDuration, checkConflicts }) {
+    const title = TemplateResolver.resolve(action.titleTemplate, msg) || msg.subject || `KeywordCal ${kind}`;
+    const description = TemplateResolver.resolve(action.descriptionTemplate, msg);
+    const calendarId = action.calendarId || "default";
+    const alarms = action.reminderMinutes || [];
+    const uid = `keywordcal-${msg.id}-${Date.now()}@keywordcal.local`;
+
+    let startDate = null, endDate = null, dueDate = null;
+    if (kind === "task") {
+      dueDate = this._resolveStartDate(msg, action);
+    } else {
+      startDate = this._resolveStartDate(msg, action);
+      if (!startDate) {
+        this._notify(`Could not determine a date for "${title}" — skipped.`);
+        return { ok: false, error: "no date could be determined" };
+      }
+      endDate = new Date(startDate.getTime() + (action.durationMinutes ?? defaultDuration) * 60000);
+    }
+
+    const created = await this._bridgeCreate(kind === "task"
+      ? { kind, calendarId, uid, title, description, dueDate: dueDate ? dueDate.toISOString() : null, alarms, category: action.category || null }
+      : { kind, calendarId, uid, title, description, startDate: startDate.toISOString(), endDate: endDate.toISOString(), alarms, category: action.category || null });
+
+    if (created && created.ok) {
+      console.log(`[KeywordCal] ${kind} created via bridge: "${title}" (${created.id})`);
+      if (checkConflicts) {
+        try {
+          const conflicts = await this.findConflicts(calendarId, startDate, endDate);
+          if (conflicts.length) {
+            const names = conflicts.map((c) => `"${c.title}"`).join(", ");
+            console.warn(`[KeywordCal] ${conflicts.length} overlapping event(s): ${names}`);
+            this._notify(`Heads-up: "${title}" overlaps ${names}`);
+          }
+        } catch (e) { /* best-effort; never fails creation */ }
+      }
+      this._notify(`${kind === "task" ? "Task" : "Event"} created in "${created.calendarName || "calendar"}": "${title}"`);
+      return created;
+    }
+    if (created) {
+      // Bridge present but refused (e.g. unknown calendar) — surface it.
+      console.warn(`[KeywordCal] Bridge refused ${kind}:`, created.error);
+      this._notify(`Calendar error: ${created.error}`);
+      return created;
+    }
+
+    try {
+      const ics = this.buildICS({ uid, title, description, startDate, endDate, dueDate, isTask: kind === "task", alarms, category: action.category });
+      await this.createViaCompose(ics, title, kind);
+      this._notify(`No calendar bridge found — opened an .ics draft for: "${title}"`);
+      return { fallback: "compose" };
+    } catch (err) {
+      console.error(`[KeywordCal] Failed to create ${kind}:`, err);
+      return null;
+    }
+  },
+
+  createEvent(msg, action) {
+    return this._fileItem(msg, action, { kind: "event", defaultDuration: 60, checkConflicts: true });
+  },
+
+  createTask(msg, action) {
+    return this._fileItem(msg, action, { kind: "task", checkConflicts: false });
+  },
+
+  /** Reminder-only: zero-duration event. */
+  createReminder(msg, action) {
+    return this.createEvent(msg, { ...action, durationMinutes: 0 });
+  },
+
+  _notify(message) {
+    try {
+      const p = browser.notifications.create({
+        type: "basic", title: "KeywordCal", message, iconUrl: "icons/icon-32.png",
+      });
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    } catch (e) { /* notifications are best-effort */ }
+  },
+};
+===== END FILE: keywordcal/lib/calendarWriter.js =====
+
+===== FILE: keywordcal/lib/dateParser.js [utf-8] =====
+/**
+ * DateParser - Extracts dates from text using regex and heuristics.
+ */
+"use strict";
+
+const WEEKDAYS = ["sunday","monday","tuesday","wednesday","thursday","friday","saturday"];
+
+/**
+ * Interpret a numeric m/d/y token. JS `new Date("10/15")` silently returns
+ * *today's year*, which would file events in the past — so if no year was
+ * present and the result is already behind us, assume next year.
+ */
+function parseNumeric(token) {
+  const d = new Date(token);
+  if (isNaN(d.getTime())) return null;
+  if (!/\d{4}/.test(token)) {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    if (d < now) d.setFullYear(d.getFullYear() + 1);
+  }
+  return d;
+}
+
+const DateParser = {
+  /** First date matching `pattern` (falls back to heuristics when absent). */
+  extract(text, pattern) {
+    if (!text) return null;
+    if (!pattern) return this._heuristicExtract(text);
+
+    try {
+      const match = text.match(new RegExp(pattern, "i"));
+      if (match) {
+        // Prefer capture group 1 ("(\d+/\d+)") over the full match, which may
+        // carry surrounding words like "Deadline ".
+        const token = (match[1] || match[0]).trim();
+        return this._fromToken(token) ||
+          console.warn(`[KeywordCal] Date pattern matched "${token}" but it is not a parseable date.`) ||
+          this._heuristicExtract(text);
+      }
+    } catch {
+      console.warn(`[KeywordCal] Invalid date pattern: ${pattern}`);
+    }
+    return this._heuristicExtract(text);
+  },
+
+  /** Parse one natural-language date token; null when unparseable. */
+  _fromToken(token) {
+    if (/\btomorrow\b/i.test(token)) return this._at9am(1);
+    const rel = /\b(this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.exec(token);
+    if (rel) return this._weekdayOf(rel[2], /\bnext\b/i.test(token) ? "next" : "this");
+    return parseNumeric(token);
+  },
+
+  /** Scan for common formats, most explicit first. */
+  _heuristicExtract(text) {
+    const patterns = [
+      /\b\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}\b/,                          // YYYY-MM-DD
+      /\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/,                        // M/D/YYYY
+      /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}\b/i,
+      /\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?\b/i,
+      /\b\d{1,2}(?:st|nd|rd|th)?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?(?:,?\s+\d{4})?\b/i,
+      /\b(?:this|next)\s+(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+      /\btomorrow\b/i,
+    ];
+    for (const p of patterns) {
+      const match = text.match(p);
+      if (!match) continue;
+      const parsed = this._fromToken(match[0]);
+      if (parsed) return parsed;
+    }
+    return null;
+  },
+
+  /** Tomorrow (or +N days) at 09:00 local. */
+  _at9am(daysAhead) {
+    const d = new Date();
+    d.setDate(d.getDate() + daysAhead);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  },
+
+  /** Upcoming `name` weekday; "next" skips same-day matches. */
+  _weekdayOf(name, mode) {
+    const target = WEEKDAYS.indexOf(name.toLowerCase());
+    if (target === -1) return null;
+    const now = new Date();
+    let diff = (target - now.getDay() + 7) % 7;
+    if (mode === "next" && diff === 0) diff = 7;
+    return this._at9am(diff);
+  },
+};
+===== END FILE: keywordcal/lib/dateParser.js =====
+
+===== FILE: keywordcal/lib/ruleEngine.js [utf-8] =====
+/**
+ * RuleEngine - Evaluates messages against rules and triggers actions.
+ */
+"use strict";
+
+const RuleEngine = {
+  /**
+   * Evaluate a message against rules. Returns an array of one result object
+   * per MATCHED rule ({ ruleName, results }) — empty array when nothing
+   * matched (used by the toolbar popup to show what happened).
+   */
+  async evaluate(messageContext, rules) {
+    const allResults = [];
+
+    for (const rule of rules) {
+      if (!rule || !Array.isArray(rule.conditions) || !Array.isArray(rule.actions)) continue;
+      const matchedConds = this._matchedConditions(messageContext, rule);
+
+      if (matchedConds) {
+        console.log(`[KeywordCal] Rule "${rule.name}" matched message "${messageContext.subject}"`);
+
+        // Expose the first matching condition's value so templates can use
+        // {keyword} (design doc §3.1). Copy so we never mutate the caller's
+        // rule objects.
+        const ctx = Object.assign({}, messageContext, {
+          keyword: matchedConds.length ? String(matchedConds[0].value) : "",
+        });
+
+        const results = [];
+        for (const action of rule.actions) {
+          results.push(await this._executeAction(ctx, action));
+        }
+        allResults.push({ ruleName: rule.name, results });
+
+        // Update last triggered timestamp
+        rule.lastTriggered = new Date().toISOString();
+        await RuleStore.updateRule(rule);
+
+        if (rule.stopProcessing) break;
+      }
+    }
+
+    return allResults;
+  },
+
+  /**
+   * Returns the list of conditions that passed when the rule matches
+   * (per matchType), or null when it does not match.
+   */
+  _matchedConditions(msg, rule) {
+    const passed = [];
+    for (const cond of rule.conditions) {
+      if (this._evaluateCondition(msg, cond)) passed.push(cond);
+    }
+
+    if (rule.matchType === "all") {
+      return passed.length === rule.conditions.length && rule.conditions.length > 0
+        ? passed
+        : null;
+    }
+    // "any"
+    return passed.length > 0 ? passed : null;
+  },
+
+  _evaluateCondition(msg, cond) {
+    const fieldValue = this._getFieldValue(msg, cond);
+    // A missing/empty field simply fails every operator except notContains
+    // ("does not contain X" is true for an absent field).
+    if (!fieldValue) return cond.operator === "notContains";
+
+    const normalized = fieldValue.toLowerCase();
+    const target = (cond.value || "").toLowerCase();
+
+    switch (cond.operator) {
+      case "contains":
+        return normalized.includes(target);
+      case "notContains":
+        return !normalized.includes(target);
+      case "is":
+        return normalized === target;
+      case "matches":
+        try {
+          return new RegExp(cond.value, "i").test(fieldValue);
+        } catch {
+          console.warn(`[KeywordCal] Invalid regex: ${cond.value}`);
+          return false;
+        }
+      default:
+        return false;
+    }
+  },
+
+  _getFieldValue(msg, cond) {
+    switch (cond.field) {
+      case "subject":   return msg.subject;
+      case "body":      return msg.body;
+      case "sender":    return msg.sender;
+      case "recipient": return msg.recipients;
+      case "header": {
+        // value format: "Header-Name::pattern" — look up raw header value.
+        // Thunderbird's messages.get() returns headers as
+        // { "X-Foo": ["value1", "value2"] } (arrays of strings), but older
+        // shapes used plain strings — handle both. Normalize case so the map
+        // is matched reliably regardless of how Thunderbird stores keys.
+        const sep = (cond.value || "").indexOf("::");
+        if (sep === -1) return "";
+        const name = cond.value.slice(0, sep).toLowerCase();
+        const headers = msg.headers || {};
+        const raw = Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
+        if (typeof raw === "string") return raw;
+        if (Array.isArray(raw)) return raw.join(", ");
+        return "";
+      }
+      default:          return "";
+    }
+  },
+
+  async _executeAction(msg, action) {
+    let result = null;
+    switch (action.type) {
+      case "createEvent":
+        result = await CalendarWriter.createEvent(msg, action);
+        break;
+      case "createTask":
+        result = await CalendarWriter.createTask(msg, action);
+        break;
+      case "createReminder":
+        result = await CalendarWriter.createReminder(msg, action);
+        break;
+      default:
+        console.warn(`[KeywordCal] Unknown action type: ${action.type}`);
+    }
+    // Annotate with the action type so the popup can label outcomes.
+    return { actionType: action.type, outcome: result };
+  },
+};
+===== END FILE: keywordcal/lib/ruleEngine.js =====
+
+===== FILE: keywordcal/lib/ruleStore.js [utf-8] =====
+"use strict";
+
+const RuleStore = {
+  STORAGE_KEY: "keywordcal_rules",
+
+  async getAllRules() {
+    const data = await browser.storage.local.get(this.STORAGE_KEY);
+    const rules = data?.[this.STORAGE_KEY];
+    return Array.isArray(rules) ? rules : [];
+  },
+
+  async getActiveRules() {
+    return (await this.getAllRules()).filter((r) => r.enabled);
+  },
+
+  async addRule(rule) {
+    const rules = await this.getAllRules();
+    const newRule = {
+      ...rule,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      lastTriggered: null,
+      enabled: rule.enabled ?? true,
+    };
+    rules.push(newRule);
+    await this._write(rules);
+    return newRule;
+  },
+
+  async addRules(rules) {
+    const current = await this.getAllRules();
+    const newRules = rules.map((r) => ({
+      ...r,
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      lastTriggered: null,
+      enabled: r.enabled ?? true,
+    }));
+    await this._write([...current, ...newRules]);
+    return newRules;
+  },
+
+  async updateRule(updatedRule) {
+    const rules = await this.getAllRules();
+    const idx = rules.findIndex((r) => r.id === updatedRule.id);
+    if (idx === -1) return;
+    rules[idx] = { ...rules[idx], ...updatedRule };
+    await this._write(rules);
+  },
+
+  async toggleRule(ruleId) {
+    const rules = await this.getAllRules();
+    const rule = rules.find((r) => r.id === ruleId);
+    if (!rule) return false;
+    rule.enabled = !rule.enabled;
+    await this._write(rules);
+    return rule.enabled;
+  },
+
+  async deleteRule(ruleId) {
+    await this._write((await this.getAllRules()).filter((r) => r.id !== ruleId));
+  },
+
+  async deleteRules(ruleIds) {
+    const ids = new Set(ruleIds);
+    await this._write((await this.getAllRules()).filter((r) => !ids.has(r.id)));
+  },
+
+  async moveRule(ruleId, newIndex) {
+    const rules = await this.getAllRules();
+    const idx = rules.findIndex((r) => r.id === ruleId);
+    if (idx === -1 || idx === newIndex) return;
+    const [rule] = rules.splice(idx, 1);
+    rules.splice(Math.max(0, Math.min(newIndex, rules.length)), 0, rule);
+    await this._write(rules);
+  },
+
+  async clearAll() {
+    await this._write([]);
+  },
+
+  async importRules(rules, merge = false) {
+    if (!Array.isArray(rules)) return 0;
+    const current = merge ? await this.getAllRules() : [];
+    const existingIds = new Set(current.map((r) => r.id));
+
+    const sanitized = rules.filter((r) => r?.name).map((r) => ({
+      ...r,
+      id: r.id || crypto.randomUUID(),
+      createdAt: r.createdAt || new Date().toISOString(),
+      lastTriggered: r.lastTriggered ?? null,
+      enabled: r.enabled ?? true,
+    }));
+
+    const toAdd = sanitized.filter((r) => !existingIds.has(r.id));
+    await this._write([...current, ...toAdd]);
+    return toAdd.length;
+  },
+
+  async _write(rules) {
+    try {
+      await browser.storage.local.set({ [this.STORAGE_KEY]: rules });
+      if (typeof refreshBadge === "function") refreshBadge().catch(() => {});
+    } catch (e) {
+      if (e.message?.includes("QUOTA_BYTES")) console.error("Storage quota exceeded");
+      else throw e;
+    }
+  },
+
+  async seedDefaults(force = false) {
+    const existing = await this.getAllRules();
+    if (existing.length > 0 && !force) return;
+
+    const existingNames = new Set(existing.map((r) => r.name));
+    const defaults = [
+      {
+        name: "ICS Auto-Accept",
+        enabled: true,
+        matchType: "all",
+        conditions: [{ field: "body", operator: "matches", value: "BEGIN:VCALENDAR" }],
+        actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "Imported from email by {sender}", dateSource: "extract", durationMinutes: 60, reminderMinutes: [15], calendarId: "default" }],
+        stopProcessing: false,
+      },
+      {
+        name: "Deadline Detector",
+        enabled: true,
+        matchType: "all",
+        conditions: [{ field: "body", operator: "contains", value: "deadline" }, { field: "body", operator: "matches", value: "\\d{1,2}/\\d{1,2}" }],
+        actions: [{ type: "createTask", titleTemplate: "Deadline: {subject}", descriptionTemplate: "From: {sender}\n\n{body_excerpt}", dateSource: "extract", datePattern: "(\\d{1,2}[/-]\\d{1,2}[/-]\\d{2,4})", reminderMinutes: [1440], calendarId: "default" }],
+        stopProcessing: false,
+      },
+      {
+        name: "Meeting Keyword",
+        enabled: true,
+        matchType: "any",
+        conditions: [{ field: "subject", operator: "contains", value: "meeting" }, { field: "subject", operator: "contains", value: "standup" }],
+        actions: [{ type: "createEvent", titleTemplate: "{subject}", descriptionTemplate: "From: {sender}", dateSource: "extract", durationMinutes: 30, reminderMinutes: [15], calendarId: "default", category: "Work" }],
+        stopProcessing: false,
+      },
+      {
+        name: "Reminder Flag",
+        enabled: true,
+        matchType: "all",
+        conditions: [{ field: "subject", operator: "contains", value: "[REMIND]" }],
+        actions: [{ type: "createReminder", titleTemplate: "{subject}", descriptionTemplate: "{body_excerpt}", dateSource: "extract", reminderMinutes: [0], calendarId: "default" }],
+        stopProcessing: false,
+      },
+    ];
+
+    for (const rule of defaults) {
+      if (!existingNames.has(rule.name)) await this.addRule(structuredClone(rule));
+    }
+  },
+};
+===== END FILE: keywordcal/lib/ruleStore.js =====
+
+===== FILE: keywordcal/lib/templateResolver.js [utf-8] =====
+/**
+ * TemplateResolver - Replaces {variables} in action templates.
+ */
+"use strict";
+
+const TemplateResolver = {
+  resolve(template, msg) {
+    if (!template) return "";
+    const vars = {
+      subject: msg.subject || "",
+      sender: msg.sender || "",
+      date: msg.date ? msg.date.toISOString().split("T")[0] : "",
+      body_excerpt: (msg.body || "").slice(0, 500),
+      keyword: msg.keyword || "",
+    };
+    // Use a replacer FUNCTION so "$&"/"$1"-style sequences inside message
+    // text are inserted literally instead of being interpreted as
+    // replacement patterns.
+    return template.replace(/\{(\w+)\}/gi, (whole, name) =>
+      Object.prototype.hasOwnProperty.call(vars, name.toLowerCase())
+        ? vars[name.toLowerCase()]
+        : whole // leave unknown placeholders visible rather than deleting them
+    );
+  },
+};
+===== END FILE: keywordcal/lib/templateResolver.js =====
+
+===== FILE: keywordcal/manifest.json [utf-8] =====
+{
+  "manifest_version": 2,
+  "name": "KeywordCal",
+  "version": "1.4.0",
+  "description": "__MSG_extensionDescription__",
+  "default_locale": "en",
+  "author": "Your Name",
+  "homepage_url": "https://example.com/keywordcal",
+  "applications": {
+    "gecko": {
+      "id": "keywordcal@yourdomain.com",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "messagesRead",
+    "accountsRead",
+    "storage",
+    "notifications",
+    "compose",
+    "tabs"
+  ],
+  "browser_action": {
+    "default_title": "KeywordCal",
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "scripts": [
+      "lib/ruleStore.js",
+      "lib/dateParser.js",
+      "lib/templateResolver.js",
+      "lib/calendarWriter.js",
+      "lib/ruleEngine.js",
+      "background.js"
+    ]
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "64": "icons/icon-64.png"
+  }
+}
+===== END FILE: keywordcal/manifest.json =====
+
+===== FILE: keywordcal/options/options.css [utf-8] =====
+/* KeywordCal — Options UI */
+
+:root {
+  --bg: #fbfbfc;
+  --fg: #222426;
+  --muted: #6b6f76;
+  --border: #d7d9de;
+  --accent: #0568b2;
+  --accent-hover: #044f87;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  margin: 0;
+  padding: 1.5rem 2rem;
+  max-width: 60rem;
+}
+
+header h1 { margin: 0 0 0.25rem; font-size: 1.5rem; }
+header .subtitle { margin: 0 0 1.5rem; color: var(--muted); }
+
+h2 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+
+.section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hint { color: var(--muted); font-style: italic; }
+.hidden { display: none !important; }
+
+#rule-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+
+#rule-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+  padding: 0.6rem 0.9rem;
+  margin-bottom: 0.5rem;
+}
+
+#rule-list li.disabled { opacity: 0.55; }
+
+#rule-list .rule-name { font-weight: 600; flex: 1; }
+#rule-list .rule-meta { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+
+button {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--fg);
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+}
+
+button:hover { background: #f0f1f3; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-hover); }
+button.secondary { background: #eef0f2; }
+button.small { padding: 0.15rem 0.5rem; font-size: 0.85rem; }
+button.danger { color: #b33; border-color: #daa; }
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  background: #fff;
+}
+
+legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.9rem; }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.4rem 0;
+}
+
+.row label { color: var(--muted); font-size: 0.9rem; }
+.checkbox-label { user-select: none; }
+
+input[type="text"], input[type="number"], select, textarea {
+  font: inherit;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.3rem 0.5rem;
+  background: #fff;
+}
+
+textarea { resize: vertical; }
+
+table { border-collapse: collapse; width: 100%; margin: 0.5rem 0; }
+th, td { text-align: left; padding: 0.3rem 0.4rem; font-size: 0.9rem; }
+th { color: var(--muted); font-weight: 500; }
+
+.action-block {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.6rem;
+}
+
+.footer-actions { margin-top: 1rem; }
+.row.buttons { margin-top: 1rem; gap: 0.75rem; }
+
+#editor-section {
+  margin-top: 2rem;
+  border-top: 2px solid var(--border);
+  padding-top: 1rem;
+}
+
+/* Status banner (bridge state) */
+.banner {
+  margin: 0.5rem 0 1rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  border: 1px solid var(--border);
+  background: #f6f8fa;
+}
+.banner.ok   { background: #e7f4e8; border-color: #b7dab9; color: #22602a; }
+.banner.warn { background: #fdf3e3; border-color: #e8cf9a; color: #7a4c07; }
+===== END FILE: keywordcal/options/options.css =====
+
+===== FILE: keywordcal/options/options.html [utf-8] =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>KeywordCal — Rules</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header>
+    <h1>KeywordCal</h1>
+    <p class="subtitle">Rule-based calendar events from incoming email</p>
+  </header>
+
+  <main>
+    <div id="status-banner" class="banner">Checking Calendar Bridge…</div>
+
+    <section id="rule-list-section">
+      <div class="section-header">
+        <h2>Rules</h2>
+        <button id="add-rule" class="primary">+ New Rule</button>
+      </div>
+      <p id="empty-hint" class="hint hidden">No rules yet. Create one or restore the example rules.</p>
+      <ul id="rule-list"></ul>
+      <div class="footer-actions">
+        <button id="restore-defaults" class="secondary">Restore Example Rules</button>
+      </div>
+    </section>
+
+    <section id="editor-section" class="hidden">
+      <h2 id="editor-title">New Rule</h2>
+      <form id="rule-form">
+        <div class="row">
+          <label for="rule-name">Name</label>
+          <input type="text" id="rule-name" required placeholder="e.g. Sync Meeting Alert" />
+          <label for="rule-enabled" class="checkbox-label">
+            <input type="checkbox" id="rule-enabled" checked /> Enabled
+          </label>
+        </div>
+
+        <fieldset>
+          <legend>Conditions</legend>
+          <div class="row">
+            <label for="match-type">Match</label>
+            <select id="match-type">
+              <option value="all">ALL conditions (AND)</option>
+              <option value="any">ANY condition (OR)</option>
+            </select>
+          </div>
+          <table id="conditions-table">
+            <thead>
+              <tr>
+                <th>Field</th><th>Operator</th><th>Value</th><th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <button type="button" id="add-condition" class="secondary small">+ Add condition</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Actions</legend>
+          <div id="actions-container"></div>
+          <button type="button" id="add-action" class="secondary small">+ Add action</button>
+        </fieldset>
+
+        <div class="row">
+          <label for="stop-processing" class="checkbox-label">
+            <input type="checkbox" id="stop-processing" /> Stop processing further rules after this rule matches
+          </label>
+        </div>
+
+        <div class="row buttons">
+          <button type="submit" class="primary">Save Rule</button>
+          <button type="button" id="cancel-edit" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <template id="condition-row">
+    <tr>
+      <td>
+        <select class="cond-field">
+          <option value="subject">Subject</option>
+          <option value="body">Body</option>
+          <option value="sender">Sender</option>
+          <option value="recipient">Recipient</option>
+          <option value="header">Header</option>
+        </select>
+      </td>
+      <td>
+        <select class="cond-operator">
+          <option value="contains">contains</option>
+          <option value="notContains">does not contain</option>
+          <option value="is">is</option>
+          <option value="matches">matches (regex)</option>
+        </select>
+      </td>
+      <td><input type="text" class="cond-value" placeholder="value or regex" /></td>
+      <td><button type="button" class="secondary small remove-condition">✕</button></td>
+    </tr>
+  </template>
+
+  <template id="action-row">
+    <div class="action-block">
+      <div class="row">
+        <label>Type</label>
+        <select class="action-type">
+          <option value="createEvent">Create event</option>
+          <option value="createTask">Create task</option>
+          <option value="createReminder">Create reminder</option>
+        </select>
+        <button type="button" class="secondary small remove-action">✕ Remove</button>
+      </div>
+      <div class="row">
+        <label>Title template</label>
+        <input type="text" class="action-title-template" value="{subject}" />
+      </div>
+      <div class="row">
+        <label>Description template</label>
+        <textarea class="action-desc-template" rows="2">{sender}</textarea>
+      </div>
+      <div class="row">
+        <label>Date source</label>
+        <select class="action-date-source">
+          <option value="extract">Extract from body</option>
+          <option value="received">Message received date</option>
+          <option value="fixed">Now (+ offset days)</option>
+        </select>
+        <input type="text" class="action-date-pattern" placeholder="date regex (optional)" />
+        <label>Offset (days)</label>
+        <input type="number" class="action-fixed-offset" step="1" min="-365" max="365" value="0" title="Only used with 'Now' date source: start the event this many days from today" />
+      </div>
+      <div class="row">
+        <label>Duration (min)</label>
+        <input type="number" class="action-duration" min="0" value="60" />
+        <label>Reminders (min before, comma-sep)</label>
+        <input type="text" class="action-reminders" placeholder="15, 1440" />
+      </div>
+      <div class="row">
+        <label>Calendar ID</label>
+        <select class="action-calendar"><option value="default">Default calendar</option></select>
+        <input type="text" class="action-calendar-manual" placeholder="or type calendar name/id" />
+        <label>Category</label>
+        <input type="text" class="action-category" placeholder="e.g. Work" />
+      </div>
+    </div>
+  </template>
+
+  <script src="../lib/ruleStore.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
+===== END FILE: keywordcal/options/options.html =====
+
+===== FILE: keywordcal/options/options.js [utf-8] =====
+/**
+ * KeywordCal - Options UI logic
+ * Rule management interface backed by RuleStore (browser.storage.local).
+ */
+"use strict";
+
+// Keep the toolbar badge fresh: this page writes rules, and in MV2 each
+// document has its own globals, so call the background script after every
+// storage mutation.
+async function refreshBadge() {
+  try {
+    await browser.runtime.sendMessage({ type: "keywordcal:refreshBadge" });
+  } catch (e) {
+    /* background may be momentarily unavailable — best-effort */
+  }
+}
+
+const elements = {
+  ruleList: document.getElementById("rule-list"),
+  emptyHint: document.getElementById("empty-hint"),
+  addRuleBtn: document.getElementById("add-rule"),
+  restoreDefaultsBtn: document.getElementById("restore-defaults"),
+  editorSection: document.getElementById("editor-section"),
+  editorTitle: document.getElementById("editor-title"),
+  form: document.getElementById("rule-form"),
+  name: document.getElementById("rule-name"),
+  enabled: document.getElementById("rule-enabled"),
+  matchType: document.getElementById("match-type"),
+  condBody: document.querySelector("#conditions-table tbody"),
+  addCondBtn: document.getElementById("add-condition"),
+  actionsContainer: document.getElementById("actions-container"),
+  addActionBtn: document.getElementById("add-action"),
+  stopProcessing: document.getElementById("stop-processing"),
+  cancelBtn: document.getElementById("cancel-edit"),
+  condTemplate: document.getElementById("condition-row"),
+  actionTemplate: document.getElementById("action-row"),
+};
+
+let editingRuleId = null; // null = creating a new rule
+
+// ---------- Rule list rendering ----------
+
+async function renderRuleList() {
+  const rules = await RuleStore.getAllRules();
+  elements.ruleList.innerHTML = "";
+  elements.emptyHint.classList.toggle("hidden", rules.length > 0);
+
+  for (const rule of rules) {
+    const li = document.createElement("li");
+    if (!rule.enabled) li.classList.add("disabled");
+
+    const name = document.createElement("span");
+    name.className = "rule-name";
+    name.textContent = rule.name || "(unnamed rule)";
+
+    const meta = document.createElement("span");
+    meta.className = "rule-meta";
+    meta.textContent =
+      `${rule.conditions.length} condition(s), ${rule.actions.length} action(s)` +
+      (rule.lastTriggered ? ` · last: ${new Date(rule.lastTriggered).toLocaleString()}` : "");
+
+    const toggleBtn = makeButton(rule.enabled ? "Disable" : "Enable", "small secondary", async () => {
+      await RuleStore.updateRule({ id: rule.id, enabled: !rule.enabled });
+      await refreshBadge();
+      renderRuleList();
+    });
+
+    const editBtn = makeButton("Edit", "small secondary", () => openEditor(rule));
+    const delBtn = makeButton("Delete", "small danger", async () => {
+      if (confirm(`Delete rule "${rule.name}"?`)) {
+        await RuleStore.deleteRule(rule.id);
+        await refreshBadge();
+        renderRuleList();
+      }
+    });
+
+    li.append(name, meta, toggleBtn, editBtn, delBtn);
+    elements.ruleList.appendChild(li);
+  }
+}
+
+function makeButton(label, className, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = className;
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+// ---------- Condition / action rows ----------
+
+function addConditionRow(cond = {}) {
+  const row = elements.condTemplate.content.firstElementChild.cloneNode(true);
+  row.querySelector(".cond-field").value = cond.field || "subject";
+  row.querySelector(".cond-operator").value = cond.operator || "contains";
+  row.querySelector(".cond-value").value = cond.value || "";
+  row.querySelector(".remove-condition").addEventListener("click", () => row.remove());
+  elements.condBody.appendChild(row);
+}
+
+function addActionRow(action = {}) {
+  const block = elements.actionTemplate.content.firstElementChild.cloneNode(true);
+  block.querySelector(".action-type").value = action.type || "createEvent";
+  block.querySelector(".action-title-template").value = action.titleTemplate ?? "{subject}";
+  block.querySelector(".action-desc-template").value = action.descriptionTemplate ?? "{sender}";
+  block.querySelector(".action-date-source").value = action.dateSource || "extract";
+  block.querySelector(".action-date-pattern").value = action.datePattern || "";
+  block.querySelector(".action-fixed-offset").value = action.fixedOffsetDays ?? 0;
+  block.querySelector(".action-duration").value = action.durationMinutes ?? 60;
+  block.querySelector(".action-reminders").value = (action.reminderMinutes || []).join(", ");
+  const calSelect = block.querySelector(".action-calendar");
+  const calManual = block.querySelector(".action-calendar-manual");
+  const wantedCal = action.calendarId || "default";
+  if (wantedCal !== "default" && !knownCalendars.some((c) => c.id === wantedCal)) {
+    calManual.value = wantedCal; // custom name/id typed by the user
+  }
+  fillCalendarSelect(calSelect, wantedCal);
+  syncCalendarControl(block);
+  // Re-sync the dropdown whenever either control changes (fixes: typing then
+  // clearing the manual box previously left the dropdown stuck on "default").
+  const sync = () => syncCalendarControl(block);
+  calManual.addEventListener("input", sync);
+  calSelect.addEventListener("change", sync);
+  block.querySelector(".action-category").value = action.category || "";
+  block.querySelector(".remove-action").addEventListener("click", () => block.remove());
+  elements.actionsContainer.appendChild(block);
+}
+
+function collectConditions() {
+  return [...elements.condBody.querySelectorAll("tr")].map((row) => ({
+    field: row.querySelector(".cond-field").value,
+    operator: row.querySelector(".cond-operator").value,
+    value: row.querySelector(".cond-value").value,
+  }));
+}
+
+function collectActions() {
+  return [...elements.actionsContainer.querySelectorAll(".action-block")].map((block) => {
+    const dateSource = block.querySelector(".action-date-source").value;
+    const fixedOffset = parseInt(block.querySelector(".action-fixed-offset").value, 10);
+    return {
+      type: block.querySelector(".action-type").value,
+      titleTemplate: block.querySelector(".action-title-template").value,
+      descriptionTemplate: block.querySelector(".action-desc-template").value,
+      dateSource,
+      datePattern: block.querySelector(".action-date-pattern").value || undefined,
+      fixedOffsetDays: dateSource === "fixed" && Number.isFinite(fixedOffset) ? fixedOffset : undefined,
+      durationMinutes: Number(block.querySelector(".action-duration").value) || 0,
+      reminderMinutes: block
+        .querySelector(".action-reminders").value
+        .split(",")
+        .map((s) => parseInt(s.trim(), 10))
+        .filter((n) => !Number.isNaN(n)),
+      calendarId: getBlockCalendarId(block),
+      category: block.querySelector(".action-category").value || undefined,
+    };
+  });
+}
+
+// ---------- Editor ----------
+
+// Calendar picker: populated from the Calendar Bridge when available.
+let knownCalendars = []; // [{ id, name }]
+
+async function refreshCalendarList() {
+  try {
+    const res = await browser.runtime.sendMessage({ type: "keywordcal:listCalendars" });
+    knownCalendars = (res && res.calendars) || [];
+  } catch (e) {
+    knownCalendars = [];
+  }
+}
+
+function fillCalendarSelect(select, current) {
+  select.innerHTML = "";
+  const mk = (value, label) => {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    select.appendChild(o);
+  };
+  mk("default", "Default calendar");
+  for (const c of knownCalendars) mk(c.id, `${c.name}${c.canWrite === false ? " (read-only)" : ""}`);
+  if (current && current !== "default" && !knownCalendars.some((c) => c.id === current)) {
+    mk(current, `${current} (custom)`);
+  }
+  select.value = [...select.options].some((o) => o.value === current) ? current : "default";
+}
+
+function syncCalendarControl(block) {
+  const sel = block.querySelector(".action-calendar");
+  const manual = block.querySelector(".action-calendar-manual");
+  const useManual = manual.value.trim() !== "";
+  sel.disabled = useManual;
+  if (useManual) sel.selectedIndex = 0;
+}
+
+function getBlockCalendarId(block) {
+  const manual = block.querySelector(".action-calendar-manual").value.trim();
+  return manual || block.querySelector(".action-calendar").value || "default";
+}
+
+function openEditor(rule = null) {
+  editingRuleId = rule ? rule.id : null;
+  elements.editorTitle.textContent = rule ? `Edit Rule: ${rule.name}` : "New Rule";
+  elements.name.value = rule ? rule.name : "";
+  elements.enabled.checked = rule ? rule.enabled : true;
+  elements.matchType.value = rule ? rule.matchType : "all";
+  elements.stopProcessing.checked = rule ? !!rule.stopProcessing : false;
+
+  elements.condBody.innerHTML = "";
+  elements.actionsContainer.innerHTML = "";
+
+  if (rule && rule.conditions.length) {
+    rule.conditions.forEach(addConditionRow);
+  } else {
+    addConditionRow();
+  }
+  if (rule && rule.actions.length) {
+    rule.actions.forEach(addActionRow);
+  } else {
+    addActionRow();
+  }
+
+  elements.editorSection.classList.remove("hidden");
+  elements.editorSection.scrollIntoView({ behavior: "smooth" });
+}
+
+function closeEditor() {
+  editingRuleId = null;
+  elements.editorSection.classList.add("hidden");
+}
+
+async function saveRule(event) {
+  event.preventDefault();
+
+  const conditions = collectConditions().filter((c) => c.value.trim() !== "");
+  const actions = collectActions();
+
+  const ruleName = elements.name.value.trim();
+  if (!ruleName) {
+    alert("Give the rule a name first.");
+    return;
+  }
+  // Thunderbird's mail-filter parser treats "," as a condition separator, so
+  // commas in rule names can corrupt exports/future filter syncs — reject.
+  if (/[,]/.test(ruleName)) {
+    alert('Rule names cannot contain commas ("," is reserved). Please use "-" instead.');
+    return;
+  }
+  if (conditions.length === 0) {
+    alert("A rule needs at least one condition with a value.");
+    return;
+  }
+  if (actions.length === 0) {
+    alert("A rule needs at least one action.");
+    return;
+  }
+
+  const ruleData = {
+    name: ruleName,
+    enabled: elements.enabled.checked,
+    matchType: elements.matchType.value,
+    conditions,
+    actions,
+    stopProcessing: elements.stopProcessing.checked,
+  };
+
+  if (editingRuleId) {
+    await RuleStore.updateRule({ id: editingRuleId, ...ruleData });
+  } else {
+    await RuleStore.addRule(ruleData);
+  }
+
+  await refreshBadge();
+  closeEditor();
+  renderRuleList();
+}
+
+// ---------- Wire up ----------
+
+async function init() {
+  await refreshCalendarList(); // populate picker before first render
+  renderRuleList();
+
+  // Live status banner: bridge state + reachable calendars, refreshed when
+  // the shared-storage registration key changes (bridge install/register).
+  const banner = document.getElementById("status-banner");
+  async function updateBanner() {
+    try {
+      const res = await browser.runtime.sendMessage({ type: "keywordcal:listCalendars" });
+      if (!banner) return;
+      if (res && res.bridgeInstalled) {
+        const names = (res.calendars || []).map((c) => c.name).join(", ");
+        banner.textContent =
+          `✔ Calendar Bridge connected. Calendars: ${names || "(none found)"}. ` +
+          "Events/tasks are filed silently into the calendar each action selects.";
+        banner.className = "banner ok";
+      } else {
+        banner.textContent =
+          "⚠ Calendar Bridge not detected — items open as .ics compose drafts instead of " +
+          "being filed directly. Install keywordcal-bridge for silent direct writes.";
+        banner.className = "banner warn";
+      }
+    } catch (e) {
+      if (banner) {
+        banner.textContent = "Background unavailable right now — reload this page after Thunderbird finishes starting.";
+        banner.className = "banner warn";
+      }
+    }
+  }
+  updateBanner();
+  if (browser.storage?.local?.onChanged) {
+    browser.storage.local.onChanged.addListener((changes) => {
+      if (changes.keywordcal_bridge_id) {
+        refreshCalendarList().then(() => {
+          updateBanner();
+          if (!elements.editorSection.classList.contains("hidden")) {
+            // Re-fill any open editor's dropdowns with the fresh list.
+            elements.actionsContainer
+              .querySelectorAll(".action-block")
+              .forEach((block) =>
+                fillCalendarSelect(
+                  block.querySelector(".action-calendar"),
+                  getBlockCalendarId(block)
+                )
+              );
+          }
+        });
+      }
+    });
+  }
+}
+
+elements.addRuleBtn.addEventListener("click", () => openEditor());
+elements.cancelBtn.addEventListener("click", closeEditor);
+elements.form.addEventListener("submit", saveRule);
+elements.addCondBtn.addEventListener("click", () => addConditionRow());
+elements.addActionBtn.addEventListener("click", () => addActionRow());
+elements.restoreDefaultsBtn.addEventListener("click", async () => {
+  if (confirm("Add the four example rules to your rule list?")) {
+    await RuleStore.seedDefaults(true);
+    await refreshBadge();
+    renderRuleList();
+  }
+});
+
+init();
+
+===== END FILE: keywordcal/options/options.js =====
+
+===== FILE: keywordcal/popup/popup.html [utf-8] =====
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    html, body { width: 340px; margin: 0; font: message-box; }
+    body { padding: 10px 12px; }
+    h1 { font-size: 14px; margin: 0 0 6px; }
+    .status { font-size: 12px; color: #555; margin-bottom: 8px; line-height: 1.5; }
+    .warn { color: #b35900; }
+    button {
+      display: block; width: 100%; margin: 4px 0; padding: 6px 8px;
+      font-size: 13px; text-align: left;
+    }
+    #result { font-size: 12px; margin-top: 8px; white-space: pre-wrap; }
+    .ok { color: #2e7d32; }
+    .err { color: #c62828; }
+    ul { margin: 4px 0; padding-left: 18px; }
+  </style>
+</head>
+<body>
+  <h1>KeywordCal</h1>
+  <div id="status" class="status">Loading…</div>
+
+  <button id="test-btn" title="Check which rules match the selected message — creates nothing">
+    ▶ Test rules on selected message
+  </button>
+  <button id="run-btn" title="Run all matching rules on the selected message and create calendar items">
+    ⚡ Run now on selected message
+  </button>
+  <button id="undo-btn" title="Delete the most recent item KeywordCal created (within 24h)" disabled>
+    ↩ Undo last action
+  </button>
+  <button id="options-btn">⚙ Manage rules…</button>
+
+  <div id="result"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
+===== END FILE: keywordcal/popup/popup.html =====
+
+===== FILE: keywordcal/popup/popup.js [utf-8] =====
+/**
+ * KeywordCal - Toolbar popup
+ * Shows engine status, lets you test/run rules against the selected message.
+ */
+"use strict";
+
+const statusEl = document.getElementById("status");
+const resultEl = document.getElementById("result");
+const undoBtn = document.getElementById("undo-btn");
+
+// Every sendMessage here must be wrapped: if the background script is
+// momentarily unavailable (add-on just updated/reloaded), a raw await would
+// throw and leave the button silently stuck on "Testing…"/"Running…".
+async function send(msg) {
+  try {
+    return await browser.runtime.sendMessage(msg);
+  } catch (err) {
+    return { ok: false, error: `Background unavailable: ${err}` };
+  }
+}
+
+async function loadStatus() {
+  const s = await send({ type: "keywordcal:getStatus" });
+  if (!s || typeof s.activeRules !== "number") {
+    statusEl.textContent = (s && s.error) || "Background unavailable.";
+    statusEl.classList.add("warn");
+    return;
+  }
+  const lines = [`${s.activeRules}/${s.totalRules} rule(s) active`];
+  if (s.lastTriggered) {
+    lines.push(`Last trigger: ${new Date(s.lastTriggered).toLocaleString()}`);
+  }
+  if (!s.bridgeInstalled) {
+    lines.push(
+      "⚠ Calendar Bridge not detected — items will open as .ics compose drafts. " +
+      "Install keywordcal-bridge for silent direct calendar writes."
+    );
+    statusEl.classList.add("warn");
+  } else {
+    const names = (s.calendars || []).map((c) => c.name).join(", ");
+    if (names) lines.push(`Calendars reachable: ${names}`);
+  }
+  // Undo availability
+  try {
+    const u = await send({ type: "keywordcal:getUndoStatus" });
+    if (u && u.available && u.entry) {
+      undoBtn.disabled = false;
+      undoBtn.textContent = `\u21A9 Undo: "${(u.entry.title || "").slice(0, 28)}"`;
+      lines.push(`Last created: "${u.entry.title}" (${new Date(u.entry.at).toLocaleTimeString()})`);
+    } else {
+      undoBtn.disabled = true;
+      undoBtn.textContent = "\u21A9 Undo last action";
+    }
+  } catch (e) { /* leave button disabled */ }
+
+  statusEl.textContent = lines.join("\n");
+  statusEl.style.whiteSpace = "pre-wrap";
+}
+
+undoBtn.addEventListener("click", async () => {
+  undoBtn.disabled = true;
+  resultEl.textContent = "Reverting\u2026";
+  const res = await send({ type: "keywordcal:undoLast" });
+  if (res && res.ok) {
+    resultEl.className = "ok";
+    resultEl.textContent = `Deleted "${res.title || "item"}" from ${res.calendarName || "calendar"}.`;
+  } else {
+    resultEl.className = "err";
+    resultEl.textContent = (res && res.error) || "Undo failed \u2014 no response.";
+  }
+  loadStatus();
+});
+
+document.getElementById("test-btn").addEventListener("click", async () => {
+  resultEl.textContent = "Testing…";
+  const res = await send({ type: "keywordcal:runOnSelected" });
+  if (!res || !res.ok) {
+    resultEl.className = "err";
+    resultEl.textContent = (res && res.error) || "No response from background.";
+    return;
+  }
+  resultEl.className = "ok";
+  if (res.matches.length === 0) {
+    resultEl.textContent = `No rules matched "${res.subject}".`;
+  } else {
+    resultEl.innerHTML =
+      `Would match <b>${res.matches.length}</b> rule(s) on "<b>${escapeHtml(res.subject)}</b>":<ul>` +
+      res.matches.map((m) => `<li>${escapeHtml(m.name)} → ${m.actions} action(s)</li>`).join("") +
+      "</ul>";
+  }
+});
+
+document.getElementById("run-btn").addEventListener("click", async () => {
+  resultEl.textContent = "Running…";
+  const res = await send({ type: "keywordcal:executeOnSelected" });
+  if (!res || !res.ok) {
+    resultEl.className = "err";
+    resultEl.textContent = (res && res.error) || "No response from background.";
+    return;
+  }
+  const firedRules = res.result; // one entry per matched rule
+  if (firedRules.length === 0) {
+    resultEl.className = "ok";
+    resultEl.textContent = `Ran on "${res.subject}" — no rules matched.`;
+    return;
+  }
+  const labelOutcome = (x) => {
+    const o = x && x.outcome;
+    const kind = (x && x.actionType) || "action";
+    if (!o) return `${kind}: failed (see Error Console)`;
+    if (o.ok === true) return `${kind}: created in "${o.calendarName || "calendar"}"`;
+    if (o.fallback === "compose") return `${kind}: opened .ics draft (no bridge)`;
+    if (o.ok === false) return `${kind}: error: ${o.error}`;
+    return `${kind}: done`;
+  };
+  resultEl.className = "ok";
+  resultEl.innerHTML =
+    firedRules
+      .map(
+        (entry) =>
+          `Rule <b>${escapeHtml(entry.ruleName)}</b> fired:<ul>` +
+          (entry.results || []).map((x) => `<li>${escapeHtml(labelOutcome(x))}</li>`).join("") +
+          "</ul>"
+      )
+      .join("") +
+    "Check your calendar or the notification.";
+});
+
+document.getElementById("options-btn").addEventListener("click", () => {
+  browser.runtime.openOptionsPage();
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
+}
+
+loadStatus();
+===== END FILE: keywordcal/popup/popup.js =====
+

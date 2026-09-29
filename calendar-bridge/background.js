@@ -22,22 +22,13 @@
  * ignored and logged.
  */
 
-// The bridge answers ANY sender that speaks the KeywordCal wire protocol
-// ({ keywordcal: "registry" } / { method: ... }). Sender-id allowlisting was
-// removed on purpose: under some Thunderbird routing modes external messages
-// arrive with an empty/undefined sender.id, which previously made the bridge
-// refuse legitimate KeywordCal calls ("unexpected sender" warnings). Foreign
-// add-ons never send KeywordCal-shaped payloads, so protocol-shape filtering
-// alone keeps them out.
 const BRIDGE_ID = "keywordcal-bridge@yourdomain.com";
-const KEYWORDCAL_HINT = "keywordcal@yourdomain.com"; // only used for log labeling
+const KEYWORDCAL_ID = "keywordcal@yourdomain.com";
 const BRIDGE_METHODS = ["listCalendars", "createItem", "deleteItem", "findConflicts"];
 const BRIDGE_STORAGE_KEY = "keywordcal_bridge_id";
 const LOG_PREFIX = "[KeywordCal Bridge]";
 
-// Anything that isn't our known protocol shape (foreign add-on discovery
-// pings from CardBook/VFS Toolkit/FileLink, junk payloads, etc.) is expected
-// and harmless — drop it silently. Only KeywordCal-shaped traffic is served.
+// Ignore unrelated runtime traffic before checking the caller identity.
 function isForeignNoise(message) {
   if (!message || typeof message !== "object") return true; // junk payload
   return !(message.keywordcal === "registry" || BRIDGE_METHODS.includes(message.method));
@@ -82,15 +73,11 @@ browser.runtime.onInstalled.addListener((info) => {
 async function handle(message, sender) {
   if (!message || typeof message !== "object") return undefined;
 
-  // Serve KeywordCal's wire protocol from any sender. Foreign add-ons
-  // (CardBook/VFS Toolkit discovery pings etc.) never send KeywordCal-shaped
-  // payloads, so they fall into isForeignNoise() and are dropped silently —
-  // no misleading warnings when Thunderbird routes messages with an empty
-  // sender.id.
   if (isForeignNoise(message)) return undefined;
 
-  if (sender && sender.id && sender.id !== BRIDGE_ID && sender.id !== KEYWORDCAL_HINT) {
-    log(`serving KeywordCal-shaped request from "${sender.id}"`);
+  if (!sender || sender.id !== KEYWORDCAL_ID) {
+    warn(`rejected KeywordCal protocol request from "${sender?.id || "unknown sender"}"`);
+    return undefined;
   }
 
   if (message.keywordcal === "registry") {

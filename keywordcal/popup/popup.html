@@ -16,6 +16,16 @@
     .ok { color: #2e7d32; }
     .err { color: #c62828; }
     ul { margin: 4px 0; padding-left: 18px; }
+    #pending-section { border-top: 1px solid #d7d9de; margin-top: 10px; padding-top: 8px; }
+    #pending-section h2 { font-size: 13px; margin: 0 0 6px; }
+    #pending-list { list-style: none; padding: 0; margin: 0; }
+    .pending-item { border: 1px solid #d7d9de; border-radius: 4px; margin: 6px 0; padding: 7px; }
+    .pending-item strong, .pending-item p { overflow-wrap: anywhere; }
+    .pending-item p { margin: 4px 0; font-size: 11px; }
+    .pending-item input { box-sizing: border-box; width: 100%; margin: 5px 0; font: inherit; }
+    .pending-actions { display: flex; gap: 6px; }
+    .pending-actions button { width: auto; flex: 1; margin: 0; text-align: center; }
+    .pending-error { color: #c62828; }
   </style>
 </head>
 <body>
@@ -32,6 +42,11 @@
     ↩ Undo last action
   </button>
   <button id="options-btn">⚙ Manage rules…</button>
+
+  <section id="pending-section" hidden>
+    <h2>Dates to confirm</h2>
+    <ul id="pending-list"></ul>
+  </section>
 
   <div id="result"></div>
 

@@ -14,7 +14,7 @@ const RuleEngine = {
 
     for (const rule of rules) {
       if (!rule || !Array.isArray(rule.conditions) || !Array.isArray(rule.actions)) continue;
-      const matchedConds = this._matchedConditions(messageContext, rule);
+      const matchedConds = await this._matchedConditions(messageContext, rule);
 
       if (matchedConds) {
         console.log(`[KeywordCal] Rule "${rule.name}" matched message "${messageContext.subject}"`);
@@ -23,7 +23,7 @@ const RuleEngine = {
         // {keyword} (design doc §3.1). Copy so we never mutate the caller's
         // rule objects.
         const ctx = Object.assign({}, messageContext, {
-          keyword: matchedConds.length ? String(matchedConds[0].value) : "",
+          keyword: matchedConds.length ? this._conditionOperand(matchedConds[0]) : "",
         });
 
         const results = [];
@@ -47,10 +47,10 @@ const RuleEngine = {
    * Returns the list of conditions that passed when the rule matches
    * (per matchType), or null when it does not match.
    */
-  _matchedConditions(msg, rule) {
+  async _matchedConditions(msg, rule) {
     const passed = [];
     for (const cond of rule.conditions) {
-      if (this._evaluateCondition(msg, cond)) passed.push(cond);
+      if (await this._evaluateCondition(msg, cond)) passed.push(cond);
     }
 
     if (rule.matchType === "all") {
@@ -62,14 +62,26 @@ const RuleEngine = {
     return passed.length > 0 ? passed : null;
   },
 
-  _evaluateCondition(msg, cond) {
+  _conditionOperand(cond) {
+    const value = String(cond.value || "");
+    if (cond.field !== "header") return value;
+    const separator = value.indexOf("::");
+    return separator === -1 ? "" : value.slice(separator + 2);
+  },
+
+  async _evaluateCondition(msg, cond) {
     const fieldValue = this._getFieldValue(msg, cond);
+    const targetValue = this._conditionOperand(cond);
+    if (cond.field === "header" && !String(cond.value || "").includes("::")) {
+      console.warn("[KeywordCal] Header condition must use Header-Name::pattern format.");
+      return false;
+    }
     // A missing/empty field simply fails every operator except notContains
     // ("does not contain X" is true for an absent field).
     if (!fieldValue) return cond.operator === "notContains";
 
     const normalized = fieldValue.toLowerCase();
-    const target = (cond.value || "").toLowerCase();
+    const target = targetValue.toLowerCase();
 
     switch (cond.operator) {
       case "contains":
@@ -80,9 +92,9 @@ const RuleEngine = {
         return normalized === target;
       case "matches":
         try {
-          return new RegExp(cond.value, "i").test(fieldValue);
-        } catch {
-          console.warn(`[KeywordCal] Invalid regex: ${cond.value}`);
+          return await RegexMatcher.test(targetValue, fieldValue);
+        } catch (error) {
+          console.warn(`[KeywordCal] Regex condition failed: ${error.message}`);
           return false;
         }
       default:
@@ -104,7 +116,7 @@ const RuleEngine = {
         // is matched reliably regardless of how Thunderbird stores keys.
         const sep = (cond.value || "").indexOf("::");
         if (sep === -1) return "";
-        const name = cond.value.slice(0, sep).toLowerCase();
+        const name = cond.value.slice(0, sep).trim().toLowerCase();
         const headers = msg.headers || {};
         const raw = Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
         if (typeof raw === "string") return raw;

@@ -7,6 +7,8 @@
 const statusEl = document.getElementById("status");
 const resultEl = document.getElementById("result");
 const undoBtn = document.getElementById("undo-btn");
+const pendingSection = document.getElementById("pending-section");
+const pendingList = document.getElementById("pending-list");
 
 // Every sendMessage here must be wrapped: if the background script is
 // momentarily unavailable (add-on just updated/reloaded), a raw await would
@@ -20,6 +22,12 @@ async function send(msg) {
 }
 
 async function loadStatus() {
+  const pendingResponse = await send({ type: "keywordcal:getPendingDates" });
+  const pending = pendingResponse && Array.isArray(pendingResponse.pending)
+    ? pendingResponse.pending
+    : [];
+  renderPendingDates(pending);
+
   const s = await send({ type: "keywordcal:getStatus" });
   if (!s || typeof s.activeRules !== "number") {
     statusEl.textContent = (s && s.error) || "Background unavailable.";
@@ -27,6 +35,7 @@ async function loadStatus() {
     return;
   }
   const lines = [`${s.activeRules}/${s.totalRules} rule(s) active`];
+  if (pending.length) lines.push(`${pending.length} date(s) need confirmation`);
   if (s.lastTriggered) {
     lines.push(`Last trigger: ${new Date(s.lastTriggered).toLocaleString()}`);
   }
@@ -110,6 +119,7 @@ document.getElementById("run-btn").addEventListener("click", async () => {
     if (!o) return `${kind}: failed (see Error Console)`;
     if (o.ok === true) return `${kind}: created in "${o.calendarName || "calendar"}"`;
     if (o.fallback === "compose") return `${kind}: opened .ics draft (no bridge)`;
+    if (o.pendingConfirmation) return `${kind}: waiting for date confirmation`;
     if (o.ok === false) return `${kind}: error: ${o.error}`;
     return `${kind}: done`;
   };
@@ -124,16 +134,97 @@ document.getElementById("run-btn").addEventListener("click", async () => {
       )
       .join("") +
     "Check your calendar or the notification.";
+  loadStatus();
 });
 
 document.getElementById("options-btn").addEventListener("click", () => {
   browser.runtime.openOptionsPage();
 });
 
+function renderPendingDates(entries) {
+  pendingSection.hidden = entries.length === 0;
+  pendingList.replaceChildren();
+
+  for (const entry of entries) {
+    const row = document.createElement("li");
+    row.className = "pending-item";
+    const title = document.createElement("strong");
+    title.textContent = entry.item?.title || "Calendar item";
+    const subject = document.createElement("p");
+    subject.textContent = `From: ${entry.subject || "(no subject)"}`;
+    const reason = document.createElement("p");
+    reason.textContent = entry.suggestion?.reason || "Please confirm the suggested date.";
+    const source = document.createElement("p");
+    source.textContent = entry.suggestion?.token
+      ? `Found: ${entry.suggestion.token}${entry.suggestion.candidateCount > 1 ? ` (${entry.suggestion.candidateCount} dates found)` : ""}`
+      : "No date found; suggested message date shown.";
+    const dateInput = document.createElement("input");
+    dateInput.type = "datetime-local";
+    const suggested = new Date(entry.suggestion?.date);
+    if (!isNaN(suggested.getTime())) {
+      dateInput.value = new Date(suggested.getTime() - suggested.getTimezoneOffset() * 60000)
+        .toISOString().slice(0, 16);
+    }
+    dateInput.setAttribute("aria-label", `Confirm date for ${entry.item?.title || "calendar item"}`);
+
+    const actions = document.createElement("div");
+    actions.className = "pending-actions";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.textContent = "Approve date";
+    approve.addEventListener("click", async () => {
+      const date = new Date(dateInput.value);
+      if (!dateInput.value || isNaN(date.getTime())) {
+        reason.className = "pending-error";
+        reason.textContent = "Choose a valid date before approving.";
+        return;
+      }
+      approve.disabled = true;
+      const response = await send({
+        type: "keywordcal:approvePendingDate",
+        pendingId: entry.id,
+        date: date.toISOString(),
+      });
+      if (response && response.ok) {
+        resultEl.className = "ok";
+        resultEl.textContent = `Created "${response.title}" in ${response.calendarName}.`;
+        loadStatus();
+      } else {
+        approve.disabled = false;
+        reason.className = "pending-error";
+        reason.textContent = (response && response.error) || "Could not create the calendar item.";
+      }
+    });
+    const skip = document.createElement("button");
+    skip.type = "button";
+    skip.textContent = "Skip";
+    skip.addEventListener("click", async () => {
+      skip.disabled = true;
+      const response = await send({ type: "keywordcal:skipPendingDate", pendingId: entry.id });
+      if (response && response.ok) {
+        resultEl.className = "ok";
+        resultEl.textContent = "Skipped the pending calendar item.";
+        loadStatus();
+      } else {
+        skip.disabled = false;
+        reason.className = "pending-error";
+        reason.textContent = (response && response.error) || "Could not skip the pending item.";
+      }
+    });
+    actions.append(approve, skip);
+    row.append(title, subject, reason, source, dateInput, actions);
+    pendingList.appendChild(row);
+  }
+}
+
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[c]);
 }
+
+browser.storage?.local?.onChanged?.addListener((changes, areaName) => {
+  if (areaName === "local" && changes.keywordcal_pending_dates) loadStatus();
+});
 
 loadStatus();
