@@ -1,0 +1,10 @@
+{
+  "extensionDescription": {
+    "message": "Generate calendar events and reminders from email keywords using configurable rules.",
+    "description": "Description of the extension, displayed in the add-on manager."
+  },
+  "extensionName": {
+    "message": "KeywordCal",
+    "description": "Name of the extension."
+  }
+}

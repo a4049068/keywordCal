@@ -1,0 +1,92 @@
+[
+  {
+    "namespace": "BridgeParent",
+    "description": "Privileged calendar access for the KeywordCal Calendar Bridge. Used only by this add-on's own background script.",
+    "functions": [
+      {
+        "name": "listCalendars",
+        "type": "function",
+        "description": "List all calendars configured in Thunderbird.",
+        "async": true,
+        "parameters": [],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              },
+              "canWrite": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      {
+        "name": "createItem",
+        "type": "function",
+        "description": "Create an event or task in the named calendar.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
+        "name": "deleteItem",
+        "type": "function",
+        "description": "Delete an item (by hashId/UID) from the named calendar \u2014 powers KeywordCal's undo.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      {
+        "name": "findConflicts",
+        "type": "function",
+        "description": "Return events in the named calendar overlapping [start,end) \u2014 powers KeywordCal's conflict warning.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "item",
+            "type": "object",
+            "additionalProperties": true
+          }
+        ],
+        "returns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    ]
+  }
+]

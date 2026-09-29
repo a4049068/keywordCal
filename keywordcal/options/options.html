@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>KeywordCal — Rules</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header>
+    <h1>KeywordCal</h1>
+    <p class="subtitle">Rule-based calendar events from incoming email</p>
+  </header>
+
+  <main>
+    <div id="status-banner" class="banner">Checking Calendar Bridge…</div>
+
+    <section id="rule-list-section">
+      <div class="section-header">
+        <h2>Rules</h2>
+        <button id="add-rule" class="primary">+ New Rule</button>
+      </div>
+      <p id="empty-hint" class="hint hidden">No rules yet. Create one or restore the example rules.</p>
+      <ul id="rule-list"></ul>
+      <div class="footer-actions">
+        <button id="restore-defaults" class="secondary">Restore Example Rules</button>
+      </div>
+    </section>
+
+    <section id="editor-section" class="hidden">
+      <h2 id="editor-title">New Rule</h2>
+      <form id="rule-form">
+        <div class="row">
+          <label for="rule-name">Name</label>
+          <input type="text" id="rule-name" required placeholder="e.g. Sync Meeting Alert" />
+          <label for="rule-enabled" class="checkbox-label">
+            <input type="checkbox" id="rule-enabled" checked /> Enabled
+          </label>
+        </div>
+
+        <fieldset>
+          <legend>Conditions</legend>
+          <div class="row">
+            <label for="match-type">Match</label>
+            <select id="match-type">
+              <option value="all">ALL conditions (AND)</option>
+              <option value="any">ANY condition (OR)</option>
+            </select>
+          </div>
+          <table id="conditions-table">
+            <thead>
+              <tr>
+                <th>Field</th><th>Operator</th><th>Value</th><th></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <button type="button" id="add-condition" class="secondary small">+ Add condition</button>
+        </fieldset>
+
+        <fieldset>
+          <legend>Actions</legend>
+          <div id="actions-container"></div>
+          <button type="button" id="add-action" class="secondary small">+ Add action</button>
+        </fieldset>
+
+        <div class="row">
+          <label for="stop-processing" class="checkbox-label">
+            <input type="checkbox" id="stop-processing" /> Stop processing further rules after this rule matches
+          </label>
+        </div>
+
+        <div class="row buttons">
+          <button type="submit" class="primary">Save Rule</button>
+          <button type="button" id="cancel-edit" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <template id="condition-row">
+    <tr>
+      <td>
+        <select class="cond-field">
+          <option value="subject">Subject</option>
+          <option value="body">Body</option>
+          <option value="sender">Sender</option>
+          <option value="recipient">Recipient</option>
+          <option value="header">Header</option>
+        </select>
+      </td>
+      <td>
+        <select class="cond-operator">
+          <option value="contains">contains</option>
+          <option value="notContains">does not contain</option>
+          <option value="is">is</option>
+          <option value="matches">matches (regex)</option>
+        </select>
+      </td>
+      <td><input type="text" class="cond-value" placeholder="value or regex" /></td>
+      <td><button type="button" class="secondary small remove-condition">✕</button></td>
+    </tr>
+  </template>
+
+  <template id="action-row">
+    <div class="action-block">
+      <div class="row">
+        <label>Type</label>
+        <select class="action-type">
+          <option value="createEvent">Create event</option>
+          <option value="createTask">Create task</option>
+          <option value="createReminder">Create reminder</option>
+        </select>
+        <button type="button" class="secondary small remove-action">✕ Remove</button>
+      </div>
+      <div class="row">
+        <label>Title template</label>
+        <input type="text" class="action-title-template" value="{subject}" />
+      </div>
+      <div class="row">
+        <label>Description template</label>
+        <textarea class="action-desc-template" rows="2">{sender}</textarea>
+      </div>
+      <div class="row">
+        <label>Date source</label>
+        <select class="action-date-source">
+          <option value="extract">Extract from body</option>
+          <option value="received">Message received date</option>
+          <option value="fixed">Now (+ offset days)</option>
+        </select>
+        <input type="text" class="action-date-pattern" placeholder="date regex (optional)" />
+        <label>Offset (days)</label>
+        <input type="number" class="action-fixed-offset" step="1" min="-365" max="365" value="0" title="Only used with 'Now' date source: start the event this many days from today" />
+      </div>
+      <div class="row">
+        <label>Duration (min)</label>
+        <input type="number" class="action-duration" min="0" value="60" />
+        <label>Reminders (min before, comma-sep)</label>
+        <input type="text" class="action-reminders" placeholder="15, 1440" />
+      </div>
+      <div class="row">
+        <label>Calendar ID</label>
+        <select class="action-calendar"><option value="default">Default calendar</option></select>
+        <input type="text" class="action-calendar-manual" placeholder="or type calendar name/id" />
+        <label>Category</label>
+        <input type="text" class="action-category" placeholder="e.g. Work" />
+      </div>
+    </div>
+  </template>
+
+  <script src="../lib/ruleStore.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
