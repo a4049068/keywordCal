@@ -115,7 +115,7 @@ class BridgeParent extends ExtensionParent.ExtensionAPI {
             );
             if (error) return { ok: false, error };
 
-            const item = isTask ? CalEvents.createTask() : CalEvents.createEvent();
+            const item = isTask ? cal.createTask() : cal.createEvent();
             item.calendar = cal.superCalendar;
 
             item.title = details.title || "KeywordCal item";
