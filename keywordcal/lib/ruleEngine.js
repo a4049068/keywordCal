@@ -100,12 +100,13 @@ const RuleEngine = {
         // value format: "Header-Name::pattern" — look up raw header value.
         // Thunderbird's messages.get() returns headers as
         // { "X-Foo": ["value1", "value2"] } (arrays of strings), but older
-        // shapes used plain strings — handle both.
+        // shapes used plain strings — handle both. Normalize case so the map
+        // is matched reliably regardless of how Thunderbird stores keys.
         const sep = (cond.value || "").indexOf("::");
         if (sep === -1) return "";
         const name = cond.value.slice(0, sep).toLowerCase();
         const headers = msg.headers || {};
-        const raw = headers[name];
+        const raw = Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
         if (typeof raw === "string") return raw;
         if (Array.isArray(raw)) return raw.join(", ");
         return "";

@@ -44,6 +44,8 @@ async function _getQueue() {
 const CalendarWriter = {
   _bridgeId: null,
   _discoveryPromise: null,
+  DEDUPE_WINDOW_MS,
+  shouldSkipDuplicate,
 
   /** Find the bridge; returns its extension id or null when absent. */
   async findBridge() {

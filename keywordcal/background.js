@@ -86,16 +86,16 @@ browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
   if (rules.length === 0) return;
 
   for (const message of messages) {
-      if (shouldSkipDuplicate(message.id)) {
-        console.log(`[KeywordCal] Skipping duplicate delivery of message ${message.id} (within ${DEDUPE_WINDOW_MS / 1000}s window)`);
+      if (CalendarWriter.shouldSkipDuplicate(message.id)) {
+        console.log(`[KeywordCal] Skipping duplicate delivery of message ${message.id} (within ${CalendarWriter.DEDUPE_WINDOW_MS / 1000}s window)`);
         continue;
       }
       try {
         const messageContext = await buildMessageContext(message.id);
-      await RuleEngine.evaluate(messageContext, rules);
-    } catch (err) {
-      console.error(`[KeywordCal] Error processing message ${message.id}:`, err);
-    }
+        await RuleEngine.evaluate(messageContext, rules);
+      } catch (err) {
+        console.error(`[KeywordCal] Error processing message ${message.id}:`, err);
+      }
   }
 });
 
@@ -110,9 +110,9 @@ browser.messages.onNewMailReceived.addListener(async (folder, messages) => {
 async function getActiveMailTab() {
   let tabs = [];
   try {
-    tabs = await browser.tabs.query({ active: true, windows: ["normal"] });
+    tabs = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tabs.length) tabs = await browser.tabs.query({ active: true });
   } catch (e) {
-    // Older/newer Thunderbird without the `windows` filter — fall back.
     tabs = await browser.tabs.query({ active: true });
   }
   return tabs.find((t) => t && t.messageId) || null;
