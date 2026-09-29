@@ -18,12 +18,30 @@ jobs:
       - name: Validate manifests
         run: |
           python - <<'PY'
-          import json, pathlib
-          for path in [pathlib.Path('keywordcal/manifest.json'), pathlib.Path('calendar-bridge/manifest.json')]:
-              with path.open() as f:
-                  json.load(f)
-          print('manifest ok')
+          import json, os, pathlib
+
+          manifests = [
+            pathlib.Path('keywordcal/manifest.json'),
+            pathlib.Path('calendar-bridge/manifest.json'),
+          ]
+          versions = []
+          for path in manifests:
+            with path.open() as f:
+              manifest = json.load(f)
+            versions.append(manifest['version'])
+
+          if os.environ.get('GITHUB_REF_TYPE') == 'tag':
+            expected = f"v{versions[0]}"
+            if any(version != versions[0] for version in versions) or os.environ['GITHUB_REF_NAME'] != expected:
+              raise SystemExit(f"Release tag must be {expected} and match both add-on versions: {versions}")
+
+          with pathlib.Path('calendar-bridge/schema.json').open() as f:
+            json.load(f)
+          print(f"manifests and schema valid; versions: {versions}")
           PY
+
+      - name: Check JavaScript syntax
+        run: find keywordcal calendar-bridge -name '*.js' -print0 | xargs -0 -n1 node --check
 
       - name: Build extension packages
         run: |
@@ -31,6 +49,23 @@ jobs:
           (cd keywordcal && zip -qr ../dist/keywordcal.xpi .)
           (cd calendar-bridge && zip -qr ../dist/calendar-bridge.xpi .)
           ls -l dist
+
+      - name: Verify extension packages
+        run: |
+          python - <<'PY'
+          import zipfile
+
+          packages = {
+              'dist/keywordcal.xpi': {'manifest.json', '_locales/en/messages.json'},
+              'dist/calendar-bridge.xpi': {'manifest.json', 'api.js', 'schema.json'},
+          }
+          for path, required in packages.items():
+              with zipfile.ZipFile(path) as package:
+                  missing = required - set(package.namelist())
+                  if missing:
+                      raise SystemExit(f"{path} is missing: {sorted(missing)}")
+          print('both XPI packages contain required files')
+          PY
 
       - name: Upload as workflow artifacts
         uses: actions/upload-artifact@v4
@@ -46,3 +81,4 @@ jobs:
           files: |
             dist/keywordcal.xpi
             dist/calendar-bridge.xpi
+          generate_release_notes: true
